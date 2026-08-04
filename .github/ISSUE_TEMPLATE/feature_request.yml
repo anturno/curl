@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose an improvement to Curl
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What review gap or install friction are you hitting?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Keep it aligned with docs/architecture.md scope when possible
+    validations:
+      required: true
+  - type: checkboxes
+    id: dogfood
+    attributes:
+      label: Dogfood
+      options:
+        - label: This can be exercised on PRs to anturno/curl

@@ -1,0 +1,19 @@
+node_modules
+.env
+.env.*
+!.env.example
+.eve
+.vercel
+.next
+.output
+.nitro
+dist
+.DS_Store
+*.tsbuildinfo
+.eve/junit.xml
+
+# Maintainer-only notes (roadmap, product decisions, drafts).
+# Keep internal/README.md tracked so the convention is visible.
+/internal/**
+!/internal/
+!/internal/README.md

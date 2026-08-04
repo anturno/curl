@@ -1,0 +1,75 @@
+# Contributing to Curl
+
+Thanks for helping improve Curl. Prefer changes that can be exercised on pull
+requests to this repository.
+
+## Development
+
+Requirements:
+
+- [Bun](https://bun.sh) **≥ 1.2** (package manager + scripts)
+- Node.js **24.x** (eve runtime)
+
+```bash
+bun install
+cp .env.example .env.local   # fill OPENCODE_API_KEY (and GitHub auth)
+bun run check                # Biome format + lint
+bun run typecheck
+bun run build
+bun run eval                 # golden PR fixtures (mock model; CI default)
+bun run eval:live            # same fixtures against OpenCode Go (needs key)
+bun run dev                  # eve HMR + REPL
+```
+
+The product is the `agent/` directory (instructions + GitHub channel). Deploy
+with `eve deploy` — there is no separate frontend host.
+
+Review-quality gates live under `evals/review/` with fixtures in
+`evals/fixtures/`. CI runs `bun run eval` with `CURL_EVAL_MOCK=1` so format
+contracts stay green without a provider key.
+
+## Review contract
+
+Default reviews cover **correctness + security** only. Keep PRs focused. Prefer
+small releases over large speculative features. Public scope is in
+[`docs/architecture.md`](./docs/architecture.md).
+
+## Changesets
+
+User-facing changes should include a changeset:
+
+```bash
+npx changeset
+```
+
+Choose an appropriate bump and describe the change in product language.
+CI / the release workflow opens a “Version Packages” PR when changesets land
+on `main`.
+
+## Developer Certificate of Origin (DCO)
+
+By contributing, you certify the
+[Developer Certificate of Origin](https://developercertificate.org/) (DCO).
+Sign off every commit:
+
+```bash
+git commit -s -m "Explain why this change exists"
+```
+
+GitHub’s “Signed-off-by” trailer is enough; we do not require a CLA for the
+Apache-2.0 core today.
+
+## Pull requests
+
+- Use the PR template
+- Include a changeset when the change is user-visible
+- Keep secrets out of the tree (use `.env.local`; see `.env.example`)
+- Link related issues when applicable
+
+## Code of conduct
+
+Participation is governed by [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
+
+## Security
+
+Report vulnerabilities privately — see [SECURITY.md](./SECURITY.md).

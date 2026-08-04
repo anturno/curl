@@ -1,0 +1,28 @@
+name: Bug report
+description: Something in Curl is broken or surprising
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. For vulnerabilities, use [Security Advisories](https://github.com/anturno/curl/security/advisories/new) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Expected vs actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Deploy shape, mention text, PR link if public
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: main @ abc123 or v0.1.0

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/anturno/curl/security/advisories/new
+    about: Report privately via GitHub Security Advisories
+  - name: Architecture & scope
+    url: https://github.com/anturno/curl/blob/main/docs/architecture.md
+    about: Read public scope before large proposals
