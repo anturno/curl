@@ -17,3 +17,7 @@ dist
 /internal/**
 !/internal/
 !/internal/README.md
+
+# Vercel CLI appends .env*; keep the example tracked.
+.env*
+!.env.example
