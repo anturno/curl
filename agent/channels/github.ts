@@ -1,6 +1,5 @@
 import { connectGitHubCredentials } from "@vercel/connect/eve";
 import { defaultGitHubAuth, githubChannel } from "eve/channels/github";
-import { materializeGitHubCheckout } from "../lib/github-host-checkout";
 
 /**
  * Bot mention slug. Prefer matching the GitHub App / Connect connector name.
@@ -14,15 +13,6 @@ const botName = process.env.GITHUB_APP_SLUG ?? "anturno-curl";
  */
 const connectorUid = process.env.CURL_GITHUB_CONNECTOR ?? `github/${botName}`;
 const useConnect = process.env.CURL_GITHUB_AUTH !== "app";
-const connectCredentials = connectGitHubCredentials(connectorUid);
-
-const credentials = useConnect
-  ? connectCredentials
-  : {
-      appId: () => requireEnv("GITHUB_APP_ID"),
-      privateKey: () => requireEnv("GITHUB_APP_PRIVATE_KEY"),
-      webhookVerifier: connectCredentials.webhookVerifier,
-    };
 
 /**
  * Auto-review on pull_request events only for the dogfood repo (Phase 0).
@@ -44,37 +34,13 @@ function requireEnv(name: string): string {
 
 export default githubChannel({
   botName,
-  credentials,
-  events: {
-    /**
-     * Replace Eve's default checkout (firewall credential brokering via
-     * setNetworkPolicy — unsupported on agentOS). Materialize the tree on the
-     * host into the agentOS host_dir mount so the installation token never
-     * enters the guest VM.
-     */
-    async "turn.started"(_data, channel, ctx) {
-      try {
-        await channel.thread.react("eyes");
-      } catch (error) {
-        console.error("[curl:github] reaction failed — swallowed", error);
-      }
-
-      try {
-        const sandbox = await ctx.getSandbox();
-        const checkout = await materializeGitHubCheckout({
-          credentials,
-          sessionKey: sandbox.id,
-          state: channel.state,
-        });
-        channel.state.checkoutPath = checkout.path;
-        if (/^[a-f0-9]{40}$/iu.test(checkout.ref)) {
-          channel.state.headSha = checkout.ref;
-        }
-      } catch (error) {
-        console.error("[curl:github] host checkout failed — swallowed", error);
-      }
-    },
-  },
+  credentials: useConnect
+    ? connectGitHubCredentials(connectorUid)
+    : {
+        appId: () => requireEnv("GITHUB_APP_ID"),
+        privateKey: () => requireEnv("GITHUB_APP_PRIVATE_KEY"),
+        webhookSecret: () => requireEnv("GITHUB_WEBHOOK_SECRET"),
+      },
   onPullRequest: (ctx, pr) => {
     if (!dogfoodAutoReview) {
       return null;

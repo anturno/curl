@@ -37,13 +37,4 @@ export default defineAgent({
   reasoning: "high",
   // OpenCode models vary; set an explicit window so eve doesn't fail metadata lookup.
   modelContextWindowTokens: Number(process.env.OPENCODE_MODEL_CONTEXT_WINDOW_TOKENS ?? 200_000),
-  build: {
-    externalDependencies: [
-      "@rivet-dev/agentos-core",
-      "@rivet-dev/agentos-eve",
-      "@rivet-dev/agentos-runtime-core",
-      "@rivet-dev/agentos-sidecar",
-      "tar",
-    ],
-  },
 });
