@@ -8,22 +8,18 @@ import { mockReviewReply } from "./lib/eval-mock-review";
  * Default: gpt-5.6-luna at high reasoning. Override with OPENCODE_MODEL.
  * @see https://opencode.ai/docs/go/
  *
- * CURL_EVAL_MOCK=1 enables deterministic CI evals (forbidden on Vercel/production).
+ * CURL_EVAL_MOCK=1 enables deterministic CI evals (forbidden on Vercel).
  */
 const useEvalMock = process.env.CURL_EVAL_MOCK === "1";
-const isDeployed =
-  process.env.VERCEL === "1" ||
-  process.env.VERCEL_ENV === "production" ||
-  process.env.NODE_ENV === "production";
+const onVercel = process.env.VERCEL === "1" || Boolean(process.env.VERCEL_ENV);
 
-if (useEvalMock && isDeployed) {
-  throw new Error(
-    "CURL_EVAL_MOCK=1 is not allowed in production or Vercel deploys (would ship fake reviews).",
-  );
+if (useEvalMock && onVercel) {
+  throw new Error("CURL_EVAL_MOCK=1 is not allowed on Vercel (would ship fake reviews).");
 }
 
-if (!useEvalMock && !process.env.OPENCODE_API_KEY) {
-  throw new Error("OPENCODE_API_KEY is required unless CURL_EVAL_MOCK=1");
+// Require the key on Vercel only — `eve build` evaluates this module in CI without secrets.
+if (!useEvalMock && !process.env.OPENCODE_API_KEY && onVercel) {
+  throw new Error("OPENCODE_API_KEY is required on Vercel unless CURL_EVAL_MOCK=1");
 }
 
 const modelId = process.env.OPENCODE_MODEL ?? "gpt-5.6-luna";
