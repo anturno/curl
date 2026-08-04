@@ -5,20 +5,13 @@ All notable changes to Anturno Curl are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## 0.1.0
 
-### Added
+### Minor Changes
 
-- Day-0 public skeleton: eve agent (deployed directly), GitHub channel, OpenCode
-  Go inference, correctness + security review instructions, and OSS scaffold.
-
-### Changed
-
-- Dropped the Next.js web chat host; Curl deploys as a pure eve agent.
-
-### Added
-
-- Biome (`bun run check`) and CI formatting/lint gate.
-- Package manager switched to Bun (`bun.lock`, `packageManager` field).
-- Split docs: public `docs/` vs maintainer-only `internal/` (gitignored).
-- Golden PR eval fixtures under `evals/` (security, correctness, clean docs).
+- First public release of Curl — an eve-based GitHub PR reviewer focused on
+  correctness and security.
+  - Deploy with `eve deploy`; trigger reviews via `@anturno-curl review`
+  - OpenCode Go inference (`gpt-5.6-luna`, high reasoning, Responses API)
+  - Dogfood auto-review on `anturno/curl` (opened / reopened / ready_for_review)
+  - Mock-backed eval fixtures for CI; `CURL_EVAL_MOCK` blocked on Vercel

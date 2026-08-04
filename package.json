@@ -1,6 +1,6 @@
 {
   "name": "anturno-curl",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Curl — open-source eve-based GitHub PR review agent",
   "license": "Apache-2.0",

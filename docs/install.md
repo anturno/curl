@@ -13,7 +13,7 @@ eve deploy
 
 Self-host: `bun run build && bun start` (serves the Nitro output under `.output/`).
 
-Prefer a **release tag** once `v0.1.0+` exists; until then, `main` is the dogfood line.
+Prefer a **release tag** (`v0.1.0+`); `main` is the dogfood line.
 
 ## 2. Connect GitHub
 
