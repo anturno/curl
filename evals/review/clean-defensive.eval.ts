@@ -3,10 +3,10 @@ import { includes, satisfies } from "eve/evals/expect";
 import { reviewPromptFromFixture } from "../lib/review-prompt";
 
 export default defineEval({
-  description: "Docs-only PR ships with no correctness/security findings.",
-  tags: ["review", "quality", "clean", "fixture"],
+  description: "Does not invent findings for intentional defensive boundary validation.",
+  tags: ["review", "quality", "clean", "defensive", "fixture"],
   async test(t) {
-    await t.send(await reviewPromptFromFixture("clean-docs.md"));
+    await t.send(await reviewPromptFromFixture("clean-defensive.md"));
     t.succeeded();
     t.check(t.reply, includes("## Curl review"));
     t.check(t.reply, includes(/\*\*Verdict:\*\*\s*ship/i));

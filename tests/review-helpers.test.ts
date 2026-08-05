@@ -31,6 +31,7 @@ const reviewCheckCompletionModule = await import("../agent/lib/review-check-comp
 const reviewCheckRunModule = await import("../agent/lib/review-check-run");
 const reviewContentModule = await import("../agent/lib/review-content");
 const reviewHeadModule = await import("../agent/lib/review-head");
+const reviewLedgerModule = await import("../agent/lib/review-ledger");
 const reviewWorkflowModule = await import("../agent/lib/review-workflow");
 const runtimeDetectionModule = await import("../agent/lib/runtime-detection");
 const agentRuntimeModule = await import("../agent/lib/agent-runtime");
@@ -64,6 +65,7 @@ const {
 const { annotateHistoricalReview, reviewCheckOutput, shouldDispatchBotMention, splitCommentBody } =
   reviewContentModule;
 const { resolvePullRequestHeadSha, resolveReviewHeadStatus } = reviewHeadModule;
+const { reviewLedger } = reviewLedgerModule;
 const { createReviewWorkflow } = reviewWorkflowModule;
 const { detectRuntime } = runtimeDetectionModule;
 const { createAgentDefinition } = agentRuntimeModule;
@@ -100,9 +102,11 @@ function fakeGitHub(
         body: bodies[index],
         ok: true,
         status: 200,
-      } as FakeResponse;
+      };
     },
-  } as unknown as GitHubHandle;
+    // GitHubHandle.request is generic over the response body; the fake routes
+    // untyped fixture bodies, so a cast is the narrowest test-boundary.
+  } as GitHubHandle;
   return { github, requests };
 }
 
@@ -156,6 +160,32 @@ function fakeChannel(github: GitHubHandle): GitHubEventContext {
       }),
       react: async () => undefined,
     },
+  };
+}
+
+function fakeChannelWithPosts(github: GitHubHandle): {
+  readonly channel: GitHubEventContext;
+  readonly posts: string[];
+} {
+  const sourceChannel = fakeChannel(github);
+  const posts: string[] = [];
+  return {
+    channel: {
+      ...sourceChannel,
+      thread: {
+        ...sourceChannel.thread,
+        post: async (body: string) => {
+          posts.push(body);
+          return {
+            htmlUrl: undefined,
+            id: 903,
+            raw: {},
+            url: undefined,
+          };
+        },
+      },
+    } as GitHubEventContext,
+    posts,
   };
 }
 
@@ -536,26 +566,66 @@ describe("Review workflow", () => {
     expect(requests).toHaveLength(2);
   });
 
+  test("keeps the exact check reference through a headless session failure", async () => {
+    const checkRun = uniqueCheckRun();
+    const { github, requests } = fakeGitHub([], async (request) => {
+      if (request.method === "GET" && request.path.endsWith("/pulls/42")) {
+        return { body: { head: { sha: checkRun.headSha } }, ok: true, status: 200 };
+      }
+      if (request.method === "GET" && request.path.includes("/commits/")) {
+        return { body: { check_runs: [] }, ok: true, status: 200 };
+      }
+      if (request.method === "POST" && request.path.endsWith("/check-runs")) {
+        return { body: { id: checkRun.id }, ok: true, status: 201 };
+      }
+      return { body: {}, ok: true, status: 200 };
+    });
+    const source = fakeChannelWithPosts(github);
+    const channel = {
+      ...source.channel,
+      state: { ...source.channel.state, headSha: null },
+    } satisfies GitHubEventContext;
+    const workflow = createReviewWorkflow({
+      automaticReview: reviewConfig.automaticReview,
+      botName: "anturno-curl",
+    });
+
+    const dispatched = await workflow.dispatch({
+      auth: baseAuth,
+      comment: {
+        author: {
+          htmlUrl: undefined,
+          id: 77,
+          login: "reviewer",
+          type: "User",
+          url: undefined,
+        },
+        body: "@anturno-curl review",
+        htmlUrl: undefined,
+        id: 901,
+        raw: {},
+        url: undefined,
+      },
+      context: fakeInboundContext(github),
+      type: "comment",
+    });
+    expect(dispatched?.auth).toEqual(withReviewCheckRun(baseAuth, checkRun));
+
+    await workflow.handle({ channel, details: {}, type: "session.failed" });
+
+    expect(source.posts).toHaveLength(1);
+    expect(
+      requests.filter(({ method, path }) => method === "GET" && path.includes("/commits/")),
+    ).toHaveLength(1);
+    expect(
+      requests.filter(({ method, path }) => method === "PATCH" && path.includes("/check-runs/")),
+    ).toHaveLength(1);
+  });
+
   test("owns final comment delivery and check completion ordering", async () => {
     const checkRun = uniqueCheckRun();
     const { github, requests } = fakeGitHub([{ head: { sha: checkRun.headSha } }, [], {}]);
-    const sourceChannel = fakeChannel(github);
-    const posts: string[] = [];
-    const channel = {
-      ...sourceChannel,
-      thread: {
-        ...sourceChannel.thread,
-        post: async (body: string) => {
-          posts.push(body);
-          return {
-            htmlUrl: undefined,
-            id: 903,
-            raw: {},
-            url: undefined,
-          };
-        },
-      },
-    } as GitHubEventContext;
+    const { channel, posts } = fakeChannelWithPosts(github);
     const workflow = createReviewWorkflow({
       automaticReview: reviewConfig.automaticReview,
       botName: "anturno-curl",
@@ -580,6 +650,407 @@ describe("Review workflow", () => {
       },
       { method: "PATCH", path: `/repos/Acme/Widgets/check-runs/${checkRun.id}` },
     ]);
+  });
+
+  test("updates only the bot-authored summary when a human spoofs the marker", async () => {
+    const checkRun = uniqueCheckRun();
+    const botCommentId = 904;
+    const humanCommentId = 905;
+    const summary = [
+      "<!-- curl:review-summary -->",
+      `<!-- curl:review-head:${checkRun.headSha} -->`,
+      "",
+      "Old summary",
+    ].join("\\n");
+    const { github, requests } = fakeGitHub([], async (request) => {
+      if (request.method === "GET" && request.path.endsWith("/pulls/42")) {
+        return { body: { head: { sha: checkRun.headSha } }, ok: true, status: 200 };
+      }
+      if (request.method === "GET" && request.path.includes("/issues/42/comments?")) {
+        return {
+          body: [
+            { body: summary, id: humanCommentId, user: { login: "reviewer", type: "User" } },
+            {
+              body: summary,
+              id: botCommentId,
+              user: { login: "anturno-curl[bot]", type: "Bot" },
+            },
+          ],
+          ok: true,
+          status: 200,
+        };
+      }
+      return { body: {}, ok: true, status: 200 };
+    });
+    const { channel, posts } = fakeChannelWithPosts(github);
+
+    await createReviewWorkflow({
+      automaticReview: reviewConfig.automaticReview,
+      botName: "anturno-curl",
+    }).handle({
+      auth: withReviewCheckRun(baseAuth, checkRun),
+      channel,
+      finishReason: "stop",
+      message: "## Curl review\\n\\n**Verdict:** ship",
+      type: "message.completed",
+    });
+
+    expect(posts).toHaveLength(0);
+    expect(requests.map(({ method, path }) => ({ method, path }))).toContainEqual({
+      method: "PATCH",
+      path: `/repos/Acme/Widgets/issues/comments/${botCommentId}`,
+    });
+    expect(requests.map(({ method, path }) => ({ method, path }))).not.toContainEqual({
+      method: "PATCH",
+      path: `/repos/Acme/Widgets/issues/comments/${humanCommentId}`,
+    });
+  });
+
+  test("paginates issue comments until it finds the bot summary", async () => {
+    const checkRun = uniqueCheckRun();
+    const botCommentId = 1_001;
+    const pageOne = Array.from({ length: 100 }, (_, index) => ({
+      body: `Human comment ${index + 1}`,
+      id: index + 1,
+      user: { login: "reviewer", type: "User" },
+    }));
+    const pageTwo = [
+      {
+        body: `<!-- curl:review-summary -->\\n<!-- curl:review-head:${checkRun.headSha} -->`,
+        id: botCommentId,
+        user: { login: "anturno-curl[bot]", type: "Bot" },
+      },
+    ];
+    const { github, requests } = fakeGitHub([], async (request) => {
+      if (request.method === "GET" && request.path.endsWith("/pulls/42")) {
+        return { body: { head: { sha: checkRun.headSha } }, ok: true, status: 200 };
+      }
+      if (request.method === "GET" && request.path.includes("/issues/42/comments?")) {
+        const page = Number(/(?:\?|&)page=(\d+)/u.exec(request.path)?.[1] ?? "0");
+        return {
+          body: page === 1 ? pageOne : page === 2 ? pageTwo : [],
+          ok: true,
+          status: 200,
+        };
+      }
+      return { body: {}, ok: true, status: 200 };
+    });
+    const { channel, posts } = fakeChannelWithPosts(github);
+
+    await createReviewWorkflow({
+      automaticReview: reviewConfig.automaticReview,
+      botName: "anturno-curl",
+    }).handle({
+      auth: withReviewCheckRun(baseAuth, checkRun),
+      channel,
+      finishReason: "stop",
+      message: "## Curl review\\n\\n**Verdict:** ship",
+      type: "message.completed",
+    });
+
+    expect(posts).toHaveLength(0);
+    expect(
+      requests
+        .filter(({ method, path }) => method === "GET" && path.includes("/comments?"))
+        .map(({ path }) => path),
+    ).toEqual([
+      "/repos/Acme/Widgets/issues/42/comments?per_page=100&page=1",
+      "/repos/Acme/Widgets/issues/42/comments?per_page=100&page=2",
+    ]);
+    expect(requests.map(({ method, path }) => ({ method, path }))).toContainEqual({
+      method: "PATCH",
+      path: `/repos/Acme/Widgets/issues/comments/${botCommentId}`,
+    });
+  });
+
+  test("avoids creating a duplicate summary when a later comment page fails", async () => {
+    const checkRun = uniqueCheckRun();
+    const pageOne = Array.from({ length: 100 }, (_, index) => ({
+      body: `Human comment ${index + 1}`,
+      id: index + 1,
+      user: { login: "reviewer", type: "User" },
+    }));
+    const { github, requests } = fakeGitHub([], async (request) => {
+      if (request.method === "GET" && request.path.endsWith("/pulls/42")) {
+        return { body: { head: { sha: checkRun.headSha } }, ok: true, status: 200 };
+      }
+      if (request.method === "GET" && request.path.includes("/issues/42/comments?")) {
+        if (request.path.endsWith("page=2")) {
+          throw Object.assign(new Error("comment page unavailable"), { status: 503 });
+        }
+        return { body: pageOne, ok: true, status: 200 };
+      }
+      return { body: {}, ok: true, status: 200 };
+    });
+    const { channel, posts } = fakeChannelWithPosts(github);
+    const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      await createReviewWorkflow({
+        automaticReview: reviewConfig.automaticReview,
+        botName: "anturno-curl",
+      }).handle({
+        auth: withReviewCheckRun(baseAuth, checkRun),
+        channel,
+        finishReason: "stop",
+        message: `<!-- curl:review-summary -->\n<!-- curl:review-head:${"a".repeat(40)} -->\n\n## Curl review\n\n**Verdict:** ship`,
+        type: "message.completed",
+      });
+    } finally {
+      warning.mockRestore();
+    }
+
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).not.toContain("<!-- curl:review-summary -->");
+    expect(
+      requests.filter(
+        ({ method, path }) => method === "PATCH" && path.includes("/issues/comments/"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("does not update another-head summaries when the current head is unavailable", async () => {
+    const checkRun = uniqueCheckRun();
+    const existingCommentId = 1_008;
+    const differentHeadSha = "b".repeat(40);
+    const existingSummary = [
+      "<!-- curl:review-summary -->",
+      `<!-- curl:review-head:${differentHeadSha} -->`,
+      "",
+      "Different-head summary",
+    ].join("\n");
+    const { github, requests } = fakeGitHub([], async (request) => {
+      if (request.method === "GET" && request.path.endsWith("/pulls/42")) {
+        return { body: { head: null }, ok: true, status: 200 };
+      }
+      if (request.method === "GET" && request.path.includes("/issues/42/comments?")) {
+        return {
+          body: [
+            {
+              body: existingSummary,
+              id: existingCommentId,
+              user: { login: "anturno-curl[bot]", type: "Bot" },
+            },
+          ],
+          ok: true,
+          status: 200,
+        };
+      }
+      return { body: {}, ok: true, status: 200 };
+    });
+    const { channel, posts } = fakeChannelWithPosts(github);
+    const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      await createReviewWorkflow({
+        automaticReview: reviewConfig.automaticReview,
+        botName: "anturno-curl",
+      }).handle({
+        auth: withReviewCheckRun(baseAuth, checkRun),
+        channel,
+        finishReason: "stop",
+        message: "## Curl review\n\n**Verdict:** ship",
+        type: "message.completed",
+      });
+    } finally {
+      warning.mockRestore();
+    }
+
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).not.toContain("<!-- curl:review-summary -->");
+    expect(
+      requests.filter(
+        ({ method, path }) => method === "PATCH" && path.includes("/issues/comments/"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("keeps a missing reviewed head out of the canonical summary path", async () => {
+    const { github } = fakeGitHub([[]]);
+    const source = fakeChannelWithPosts(github);
+    const channel = {
+      ...source.channel,
+      state: { ...source.channel.state, headSha: null },
+    } satisfies GitHubEventContext;
+
+    await createReviewWorkflow({
+      automaticReview: reviewConfig.automaticReview,
+      botName: "anturno-curl",
+    }).handle({
+      auth: baseAuth,
+      channel,
+      finishReason: "stop",
+      message: "## Curl review\n\n**Verdict:** ship",
+      type: "message.completed",
+    });
+
+    expect(source.posts).toHaveLength(1);
+    expect(source.posts[0]).not.toContain("<!-- curl:review-summary -->");
+  });
+
+  test("posts stale findings without replacing the current-head summary", async () => {
+    const checkRun = uniqueCheckRun();
+    const currentHeadSha = "b".repeat(40);
+    const existingCommentId = 1_003;
+    const existingSummary = [
+      "<!-- curl:review-summary -->",
+      `<!-- curl:review-head:${currentHeadSha} -->`,
+      "",
+      "Current-head summary",
+    ].join("\n");
+    const { github, requests } = fakeGitHub([], async (request) => {
+      if (request.method === "GET" && request.path.endsWith("/pulls/42")) {
+        return { body: { head: { sha: currentHeadSha } }, ok: true, status: 200 };
+      }
+      if (request.method === "GET" && request.path.includes("/issues/42/comments?")) {
+        return {
+          body: [
+            {
+              body: existingSummary,
+              id: existingCommentId,
+              user: { login: "anturno-curl[bot]", type: "Bot" },
+            },
+          ],
+          ok: true,
+          status: 200,
+        };
+      }
+      return { body: {}, ok: true, status: 200 };
+    });
+    const { channel, posts } = fakeChannelWithPosts(github);
+
+    await createReviewWorkflow({
+      automaticReview: reviewConfig.automaticReview,
+      botName: "anturno-curl",
+    }).handle({
+      auth: withReviewCheckRun(baseAuth, checkRun),
+      channel,
+      finishReason: "stop",
+      message: "## Curl review\n\n**Verdict:** needs changes",
+      type: "message.completed",
+    });
+
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toContain("Historical review");
+    expect(requests.map(({ method, path }) => ({ method, path }))).not.toContainEqual({
+      method: "PATCH",
+      path: `/repos/Acme/Widgets/issues/comments/${existingCommentId}`,
+    });
+  });
+
+  test("records cancellation outcomes without review content", async () => {
+    const checkRun = uniqueCheckRun();
+    const { github } = fakeGitHub([{}]);
+    const channel = fakeChannel(github);
+
+    await createReviewWorkflow({
+      automaticReview: reviewConfig.automaticReview,
+      botName: "anturno-curl",
+    }).handle({
+      auth: withReviewCheckRun(baseAuth, checkRun),
+      channel,
+      type: "turn.cancelled",
+    });
+
+    expect(reviewLedger.snapshot().slice(-1)[0]).toMatchObject({
+      delivered: false,
+      findingCount: 0,
+      pullRequestNumber: 42,
+      repository: "Acme/Widgets",
+      reviewedHeadSha: checkRun.headSha,
+      stale: null,
+    });
+  });
+
+  test("records one terminal outcome when failure events repeat", async () => {
+    const checkRun = uniqueCheckRun();
+    const { github } = fakeGitHub([{}, { check_runs: [] }]);
+    const { channel, posts } = fakeChannelWithPosts(github);
+    const workflow = createReviewWorkflow({
+      automaticReview: reviewConfig.automaticReview,
+      botName: "anturno-curl",
+    });
+    const before = reviewLedger.snapshot().length;
+
+    await workflow.handle({
+      auth: withReviewCheckRun(baseAuth, checkRun),
+      channel,
+      details: { errorId: "turn-failed" },
+      type: "turn.failed",
+    });
+    await workflow.handle({
+      channel,
+      details: { errorId: "session-failed" },
+      type: "session.failed",
+    });
+
+    expect(posts).toHaveLength(2);
+    expect(reviewLedger.snapshot()).toHaveLength(before + 1);
+  });
+
+  test("retries an uneditable summary on the next review", async () => {
+    const checkRun = uniqueCheckRun();
+    const existingCommentId = 1_005;
+    const existingSummary = [
+      "<!-- curl:review-summary -->",
+      `<!-- curl:review-head:${checkRun.headSha} -->`,
+      "",
+      "Old summary",
+    ].join("\n");
+    let updateAttempts = 0;
+    const { github, requests } = fakeGitHub([], async (request) => {
+      if (request.method === "GET" && request.path.endsWith("/pulls/42")) {
+        return { body: { head: { sha: checkRun.headSha } }, ok: true, status: 200 };
+      }
+      if (request.method === "GET" && request.path.includes("/issues/42/comments?")) {
+        return {
+          body: [
+            {
+              body: existingSummary,
+              id: existingCommentId,
+              user: { login: "anturno-curl[bot]", type: "Bot" },
+            },
+          ],
+          ok: true,
+          status: 200,
+        };
+      }
+      if (request.method === "PATCH" && request.path.includes("/issues/comments/")) {
+        updateAttempts += 1;
+        if (updateAttempts === 1) {
+          throw Object.assign(new Error("comment temporarily unavailable"), { status: 403 });
+        }
+      }
+      return { body: {}, ok: true, status: 200 };
+    });
+    const { channel, posts } = fakeChannelWithPosts(github);
+    const workflow = createReviewWorkflow({
+      automaticReview: reviewConfig.automaticReview,
+      botName: "anturno-curl",
+    });
+    const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      for (let review = 0; review < 2; review += 1) {
+        await workflow.handle({
+          auth: withReviewCheckRun(baseAuth, checkRun),
+          channel,
+          finishReason: "stop",
+          message: "## Curl review\n\n**Verdict:** ship",
+          type: "message.completed",
+        });
+      }
+    } finally {
+      warning.mockRestore();
+    }
+
+    expect(posts).toHaveLength(1);
+    expect(updateAttempts).toBe(2);
+    expect(
+      requests.filter(
+        ({ method, path }) => method === "PATCH" && path.includes("/issues/comments/"),
+      ),
+    ).toHaveLength(2);
   });
 });
 
@@ -670,12 +1141,10 @@ describe("GitHub request helpers", () => {
       }),
     ).toBeNull();
 
-    const malformedCreate = fakeGitHub(
-      [],
-      async (_request, index) =>
-        (index === 0
-          ? { body: { check_runs: [] }, ok: true, status: 200 }
-          : { body: { id: "not-a-number" }, ok: true, status: 201 }) as FakeResponse,
+    const malformedCreate = fakeGitHub([], async (_request, index) =>
+      index === 0
+        ? { body: { check_runs: [] }, ok: true, status: 200 }
+        : { body: { id: "not-a-number" }, ok: true, status: 201 },
     );
     expect(
       await startReviewCheckRun({
@@ -742,6 +1211,11 @@ describe("GitHub request helpers", () => {
       method: "GET",
       path: "/repos/Acme/Widgets/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs?check_name=Curl%20review&status=in_progress&filter=latest",
     });
+
+    const missingHead = fakeChannel(fakeGitHub([{ check_runs: [{ id: 840_002 }] }]).github);
+    missingHead.state.headSha = null;
+    const missingResult = await findReviewCheckRunForChannel(missingHead);
+    expect(missingResult).toBeNull();
   });
 });
 
@@ -906,7 +1380,7 @@ describe("Check Run completion lifecycle", () => {
       if (index === 0) {
         throw Object.assign(new Error("response contains a credential"), { status: 403 });
       }
-      return { body: {}, ok: true, status: 200 } as FakeResponse;
+      return { body: {}, ok: true, status: 200 };
     });
     const checkRun = uniqueCheckRun();
     await expect(
@@ -982,5 +1456,53 @@ describe("Check Run completion lifecycle", () => {
       checkRun,
     );
     expect(malformedStatus.requests[1]?.method).toBe("PATCH");
+  });
+
+  test("updates the bot summary on the final full page under the comment pagination cap", async () => {
+    const checkRun = uniqueCheckRun();
+    const summaryId = 10_000;
+    const { github, requests } = fakeGitHub([], async (request) => {
+      if (request.method === "GET" && request.path.endsWith("/pulls/42")) {
+        return { body: { head: { sha: checkRun.headSha } }, ok: true, status: 200 };
+      }
+      if (request.method === "GET" && request.path.includes("/issues/42/comments?")) {
+        const page = Number(/(?:\?|&)page=(\d+)/u.exec(request.path)?.[1] ?? "0");
+        const body = Array.from({ length: 100 }, (_, index) => ({
+          body: `Human comment ${(page - 1) * 100 + index + 1}`,
+          id: (page - 1) * 100 + index + 1,
+          user: { login: "reviewer", type: "User" },
+        }));
+        if (page === 100) {
+          body[99] = {
+            body: `<!-- curl:review-summary -->\n<!-- curl:review-head:${checkRun.headSha} -->`,
+            id: summaryId,
+            user: { login: "anturno-curl[bot]", type: "Bot" },
+          };
+        }
+        return { body, ok: true, status: 200 };
+      }
+      return { body: {}, ok: true, status: 200 };
+    });
+    const { channel, posts } = fakeChannelWithPosts(github);
+
+    await createReviewWorkflow({
+      automaticReview: reviewConfig.automaticReview,
+      botName: "anturno-curl",
+    }).handle({
+      auth: withReviewCheckRun(baseAuth, checkRun),
+      channel,
+      finishReason: "stop",
+      message: "## Curl review\n\n**Verdict:** ship",
+      type: "message.completed",
+    });
+
+    expect(posts).toHaveLength(0);
+    expect(
+      requests.filter(({ method, path }) => method === "GET" && path.includes("/comments?")),
+    ).toHaveLength(100);
+    expect(requests.map(({ method, path }) => ({ method, path }))).toContainEqual({
+      method: "PATCH",
+      path: `/repos/Acme/Widgets/issues/comments/${summaryId}`,
+    });
   });
 });

@@ -71,6 +71,58 @@ export function mockReviewReply(userMessage: string): string {
     ].join("\n");
   }
 
+  if (text.includes("fixture:combined-correctness-security")) {
+    return [
+      "## Curl review",
+      "",
+      "**Verdict:** needs changes",
+      "**Focus:** correctness + security",
+      "",
+      "### Critical",
+      "- `src/render.ts` (`renderUserHtml`): assigns untrusted bio content to `innerHTML`, enabling XSS.",
+      "  Keep untrusted content in `textContent` or sanitize it before rendering.",
+      "",
+      "### High",
+      "- `src/sum.ts` (`sumUpTo`): the changed loop is off-by-one and returns the wrong inclusive sum.",
+      "  Restore the contract-aligned bound and verify the boundary case with a test.",
+    ].join("\n");
+  }
+
+  if (text.includes("fixture:real-defect")) {
+    return [
+      "## Curl review",
+      "",
+      "**Verdict:** needs changes",
+      "**Focus:** correctness + security",
+      "",
+      "### High",
+      "- `src/permissions.ts` (`canDelete`): the fallback grants deletion to any authenticated viewer.",
+      "  This source-backed path bypasses the intended owner/admin check; restrict the fallback to the documented roles.",
+    ].join("\n");
+  }
+
+  if (text.includes("fixture:refuted-candidate")) {
+    return [
+      "## Curl review",
+      "",
+      "**Verdict:** ship",
+      "**Focus:** correctness + security",
+      "",
+      "No correctness or security findings remain after checking the validation guard and parameterized query.",
+    ].join("\n");
+  }
+
+  if (text.includes("fixture:clean-defensive")) {
+    return [
+      "## Curl review",
+      "",
+      "**Verdict:** ship",
+      "**Focus:** correctness + security",
+      "",
+      "No correctness or security findings in the provided defensive validation change.",
+    ].join("\n");
+  }
+
   if (text.includes("fixture:clean")) {
     return [
       "## Curl review",

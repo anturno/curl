@@ -19,6 +19,7 @@ import {
 } from "./review-check-run";
 import {
   annotateHistoricalReview,
+  normalizeBotName,
   REVIEW_COMMENT_MAX,
   reviewCheckOutput,
   shouldDispatchBotMention,
@@ -29,10 +30,18 @@ import {
   resolvePullRequestHeadSha,
   resolveReviewHeadStatus,
 } from "./review-head";
+import { reviewLedger, summarizeReviewMessage } from "./review-ledger";
 
 const REVIEW_SUMMARY_MARKER = "<!-- curl:review-summary -->";
 const REVIEW_HEAD_MARKER_PREFIX = "<!-- curl:review-head:";
 const REVIEW_HEAD_MARKER_SUFFIX = " -->";
+const COMMENT_PAGE_SIZE = 100;
+const MAX_COMMENT_PAGES = 100;
+const MAX_TRACKED_ACTIVE_CHECK_RUNS = 1_024;
+const MAX_TRACKED_REVIEW_STARTS = 1_024;
+// A review may write both a check and a conversation key, so the ledger
+// deduplication map is sized for two keys per tracked review.
+const MAX_TRACKED_REVIEW_KEYS = 2_048;
 
 export interface ReviewWorkflowOptions {
   readonly automaticReview: AutomaticReviewConfig;
@@ -98,6 +107,10 @@ export function createReviewWorkflow(options: ReviewWorkflowOptions): ReviewWork
 }
 
 class DefaultReviewWorkflow implements ReviewWorkflow {
+  private readonly activeCheckRuns = new Map<string, ReviewCheckRun>();
+  private readonly reviewStarts = new Map<number, number>();
+  private readonly recordedReviewKeys = new Map<string, boolean>();
+
   constructor(private readonly options: ReviewWorkflowOptions) {}
 
   async dispatch(input: ReviewDispatchInput): Promise<GitHubInboundResult | null> {
@@ -111,32 +124,46 @@ class DefaultReviewWorkflow implements ReviewWorkflow {
         // check output.
         await this.handleMessageCompleted(input);
         return;
-      case "turn.completed":
+      case "turn.completed": {
         // Fallback when a turn ends without a posted review message. The remote
         // status check prevents this generic output from replacing final details.
-        await completeReviewCheckRunIfOpen(
-          input.channel,
-          {
-            authoritative: false,
-            conclusion: "neutral",
-            title: "Review complete",
-            summary: "Curl finished. See the review comment on this pull request.",
-          },
-          reviewCheckRunFromAuth(input.auth),
-        );
+        const checkRun = reviewCheckRunFromAuth(input.auth);
+        const durationMs = this.consumeReviewDuration(checkRun);
+        try {
+          await completeReviewCheckRunIfOpen(
+            input.channel,
+            {
+              authoritative: false,
+              conclusion: "neutral",
+              title: "Review complete",
+              summary: "Curl finished. See the review comment on this pull request.",
+            },
+            checkRun,
+          );
+        } finally {
+          this.writeReviewLedger(input.channel, checkRun, null, null, false, durationMs, false);
+        }
         return;
-      case "turn.cancelled":
-        await completeReviewCheckRun(
-          input.channel,
-          {
-            authoritative: true,
-            conclusion: "cancelled",
-            title: "Review cancelled",
-            summary: "The review turn was cancelled before completion.",
-          },
-          reviewCheckRunFromAuth(input.auth),
-        );
+      }
+      case "turn.cancelled": {
+        const checkRun = reviewCheckRunFromAuth(input.auth);
+        const durationMs = this.consumeReviewDuration(checkRun);
+        try {
+          await completeReviewCheckRun(
+            input.channel,
+            {
+              authoritative: true,
+              conclusion: "cancelled",
+              title: "Review cancelled",
+              summary: "The review turn was cancelled before completion.",
+            },
+            checkRun,
+          );
+        } finally {
+          this.writeReviewLedger(input.channel, checkRun, null, null, false, durationMs, true);
+        }
         return;
+      }
       case "turn.failed":
         await this.handleTurnFailure(input);
         return;
@@ -172,6 +199,12 @@ class DefaultReviewWorkflow implements ReviewWorkflow {
       repo: input.context.repository.name,
       pullRequestNumber: input.context.conversation.pullRequestNumber,
     });
+    this.rememberReviewStart(
+      input.context.repository.owner,
+      input.context.repository.name,
+      input.context.conversation.pullRequestNumber,
+      checkRun,
+    );
 
     return { auth: withReviewCheckRun(input.auth, checkRun) };
   }
@@ -197,6 +230,12 @@ class DefaultReviewWorkflow implements ReviewWorkflow {
       pullRequestNumber: input.pullRequest.pullRequestNumber,
       headSha: input.pullRequest.headSha,
     });
+    this.rememberReviewStart(
+      input.context.repository.owner,
+      input.context.repository.name,
+      input.pullRequest.pullRequestNumber,
+      checkRun,
+    );
 
     return {
       auth: withReviewCheckRun(input.auth, checkRun),
@@ -237,6 +276,98 @@ class DefaultReviewWorkflow implements ReviewWorkflow {
     });
   }
 
+  private rememberReviewStart(
+    owner: string,
+    repo: string,
+    pullRequestNumber: number | null,
+    checkRun: ReviewCheckRun | null,
+  ): void {
+    const conversationKey = reviewConversationKey(owner, repo, pullRequestNumber);
+    this.recordedReviewKeys.delete(`conversation:${conversationKey}`);
+    if (checkRun === null) {
+      this.activeCheckRuns.delete(conversationKey);
+      return;
+    }
+    this.recordedReviewKeys.delete(`check:${checkRun.id}`);
+    this.activeCheckRuns.set(conversationKey, checkRun);
+    while (this.activeCheckRuns.size > MAX_TRACKED_ACTIVE_CHECK_RUNS) {
+      const oldest = this.activeCheckRuns.keys().next().value;
+      if (typeof oldest !== "string") {
+        break;
+      }
+      this.activeCheckRuns.delete(oldest);
+    }
+    this.reviewStarts.set(checkRun.id, Date.now());
+    while (this.reviewStarts.size > MAX_TRACKED_REVIEW_STARTS) {
+      const oldest = this.reviewStarts.keys().next().value;
+      if (typeof oldest !== "number") {
+        break;
+      }
+      this.reviewStarts.delete(oldest);
+    }
+  }
+
+  private consumeReviewDuration(checkRun: ReviewCheckRun | null): number | null {
+    if (checkRun === null) {
+      return null;
+    }
+    const startedAt = this.reviewStarts.get(checkRun.id);
+    this.reviewStarts.delete(checkRun.id);
+    return startedAt === undefined ? null : Math.max(0, Date.now() - startedAt);
+  }
+
+  private writeReviewLedger(
+    channel: GitHubEventContext,
+    checkRun: ReviewCheckRun | null,
+    headStatus: ReviewHeadStatus | null,
+    message: string | null,
+    delivered: boolean,
+    durationMs: number | null,
+    authoritative: boolean,
+  ): void {
+    const conversationIdentity = reviewConversationKey(
+      channel.state.owner,
+      channel.state.repo,
+      channel.state.pullRequestNumber,
+    );
+    const trackedCheckRun =
+      checkRun !== null && this.activeCheckRuns.get(conversationIdentity)?.id === checkRun.id;
+    if (trackedCheckRun && (message !== null || authoritative)) {
+      this.activeCheckRuns.delete(conversationIdentity);
+    }
+    const conversationKey = `conversation:${conversationIdentity}`;
+    const keys = [
+      ...reviewLedgerKeys(channel, checkRun),
+      ...(message === null || authoritative ? [conversationKey] : []),
+    ].filter((key, index, all) => all.indexOf(key) === index);
+    const existing = keys.map((key) => this.recordedReviewKeys.get(key));
+    if (existing.some((value) => value === true)) {
+      return;
+    }
+    if (!authoritative && existing.some((value) => value !== undefined)) {
+      return;
+    }
+    for (const key of keys) {
+      this.recordedReviewKeys.set(key, authoritative);
+    }
+    while (this.recordedReviewKeys.size > MAX_TRACKED_REVIEW_KEYS) {
+      const oldest = this.recordedReviewKeys.keys().next().value;
+      if (typeof oldest !== "string") {
+        break;
+      }
+      this.recordedReviewKeys.delete(oldest);
+    }
+    reviewLedger.record({
+      ...summarizeReviewMessage(message ?? ""),
+      delivered,
+      durationMs,
+      pullRequestNumber: channel.state.pullRequestNumber,
+      repository: `${channel.state.owner}/${channel.state.repo}`,
+      reviewedHeadSha: checkRun?.headSha ?? channel.state.headSha,
+      stale: headStatus?.currentHeadSha === null ? null : (headStatus?.stale ?? null),
+    });
+  }
+
   private async handleMessageCompleted(
     input: Extract<ReviewLifecycleEvent, { readonly type: "message.completed" }>,
   ): Promise<void> {
@@ -266,17 +397,30 @@ class DefaultReviewWorkflow implements ReviewWorkflow {
             summary: "Curl could not post the review comment.",
             text: undefined,
           };
-      await completeReviewCheckRun(
-        input.channel,
-        {
-          authoritative: true,
-          conclusion: posted ? "neutral" : "failure",
-          title: output.title,
-          summary: output.summary,
-          ...(output.text ? { text: output.text } : {}),
-        },
-        checkRun,
-      );
+      const durationMs = this.consumeReviewDuration(checkRun);
+      try {
+        await completeReviewCheckRun(
+          input.channel,
+          {
+            authoritative: true,
+            conclusion: posted ? "neutral" : "failure",
+            title: output.title,
+            summary: output.summary,
+            ...(output.text ? { text: output.text } : {}),
+          },
+          checkRun,
+        );
+      } finally {
+        this.writeReviewLedger(
+          input.channel,
+          checkRun,
+          headStatus,
+          reviewMessage,
+          posted,
+          durationMs,
+          true,
+        );
+      }
     }
   }
 
@@ -284,44 +428,60 @@ class DefaultReviewWorkflow implements ReviewWorkflow {
     input: Extract<ReviewLifecycleEvent, { readonly type: "turn.failed" }>,
   ): Promise<void> {
     const checkRun = reviewCheckRunFromAuth(input.auth);
-    await this.postFailure(
-      input.channel,
-      "I hit an error while handling your request.",
-      safeErrorId(input.details),
-      checkRun,
-    );
-    await completeReviewCheckRun(
-      input.channel,
-      {
-        authoritative: true,
-        conclusion: "failure",
-        title: "Review failed",
-        summary: "Curl could not complete this review.",
-      },
-      checkRun,
-    );
+    const durationMs = this.consumeReviewDuration(checkRun);
+    try {
+      await this.postFailure(
+        input.channel,
+        "I hit an error while handling your request.",
+        safeErrorId(input.details),
+        checkRun,
+      );
+      await completeReviewCheckRun(
+        input.channel,
+        {
+          authoritative: true,
+          conclusion: "failure",
+          title: "Review failed",
+          summary: "Curl could not complete this review.",
+        },
+        checkRun,
+      );
+    } finally {
+      this.writeReviewLedger(input.channel, checkRun, null, null, false, durationMs, true);
+    }
   }
 
   private async handleSessionFailure(
     input: Extract<ReviewLifecycleEvent, { readonly type: "session.failed" }>,
   ): Promise<void> {
-    const checkRun = await findReviewCheckRunForChannel(input.channel);
-    await this.postFailure(
-      input.channel,
-      "This session could not recover from an error.",
-      safeErrorId(input.details),
-      checkRun,
+    const persistedCheckRun = await findReviewCheckRunForChannel(input.channel);
+    const conversationKey = reviewConversationKey(
+      input.channel.state.owner,
+      input.channel.state.repo,
+      input.channel.state.pullRequestNumber,
     );
-    await completeReviewCheckRun(
-      input.channel,
-      {
-        authoritative: true,
-        conclusion: "failure",
-        title: "Review failed",
-        summary: "Curl could not complete this review session.",
-      },
-      checkRun,
-    );
+    const checkRun = persistedCheckRun ?? this.activeCheckRuns.get(conversationKey) ?? null;
+    const durationMs = this.consumeReviewDuration(checkRun);
+    try {
+      await this.postFailure(
+        input.channel,
+        "This session could not recover from an error.",
+        safeErrorId(input.details),
+        checkRun,
+      );
+      await completeReviewCheckRun(
+        input.channel,
+        {
+          authoritative: true,
+          conclusion: "failure",
+          title: "Review failed",
+          summary: "Curl could not complete this review session.",
+        },
+        checkRun,
+      );
+    } finally {
+      this.writeReviewLedger(input.channel, checkRun, null, null, false, durationMs, true);
+    }
   }
 
   private async postComment(
@@ -367,7 +527,7 @@ class DefaultReviewWorkflow implements ReviewWorkflow {
     // Review-thread replies must continue through Eve's thread binding; a
     // timeline summary marker cannot be patched through the review-comment API.
     if (channel.thread.kind === "review_thread" || channel.state.pullRequestNumber === null) {
-      await this.postComment(channel, message, checkRun);
+      await this.postComment(channel, stripReviewMarkers(message), checkRun);
       return;
     }
     await this.postTimelineReviewSummary(channel, message, checkRun, headStatus);
@@ -379,29 +539,41 @@ class DefaultReviewWorkflow implements ReviewWorkflow {
     checkRun: ReviewCheckRun | null,
     headStatus: ReviewHeadStatus | null,
   ): Promise<void> {
+    const stripped = stripReviewMarkers(message);
     const reviewedHeadSha = checkRun?.headSha ?? channel.state.headSha;
-    const body = summaryBody(message, reviewedHeadSha);
+    if (!isReviewHeadSha(reviewedHeadSha)) {
+      await this.postComment(channel, stripped, checkRun, "comment.post-unknown-head");
+      return;
+    }
+    const body = summaryBody(stripped, reviewedHeadSha);
 
     // Preserve the established chunking behavior for unusually large reviews.
     // A split body cannot be updated as one sticky comment without inventing a
     // multi-comment identity protocol, so the marker is used for normal-sized
     // prioritized summaries only.
     if (body.length > REVIEW_COMMENT_MAX) {
-      await this.postComment(channel, message, checkRun, "comment.post-long-summary");
+      await this.postComment(channel, stripped, checkRun, "comment.post-long-summary");
       return;
     }
 
-    const existing = await this.findExistingReviewSummary(channel, checkRun);
+    const lookup = await this.findExistingReviewSummary(channel, checkRun);
+    if (lookup.kind === "unavailable") {
+      await this.postComment(channel, stripped, checkRun, "comment.post-summary-lookup-failure");
+      return;
+    }
+    const existing = lookup.kind === "found" ? lookup.summary : null;
     const sameReviewSummary =
       existing?.reviewedHeadSha !== null &&
       existing?.reviewedHeadSha !== undefined &&
       reviewedHeadSha !== null &&
       existing.reviewedHeadSha.toLowerCase() === reviewedHeadSha.toLowerCase();
-    if (existing !== null && headStatus?.stale && !sameReviewSummary) {
-      // An older run must not replace a summary that may describe the current
-      // head. Deliver the historical result as a normal timeline comment; its
-      // explicit SHA warning keeps it from looking current.
-      await this.postComment(channel, message, checkRun, "comment.post-historical-summary");
+    if (existing !== null && !sameReviewSummary) {
+      await this.postComment(
+        channel,
+        stripped,
+        checkRun,
+        headStatus?.stale ? "comment.post-historical-summary" : "comment.post-unmatched-summary",
+      );
       return;
     }
 
@@ -422,7 +594,7 @@ class DefaultReviewWorkflow implements ReviewWorkflow {
         // uneditable. The next review can find the marker and retry an update.
         await this.postComment(
           channel,
-          message,
+          stripped,
           checkRun,
           "comment.post-after-summary-update-failure",
         );
@@ -444,44 +616,58 @@ class DefaultReviewWorkflow implements ReviewWorkflow {
   private async findExistingReviewSummary(
     channel: GitHubEventContext,
     checkRun: ReviewCheckRun | null,
-  ): Promise<ExistingReviewSummary | null> {
+  ): Promise<ExistingReviewSummaryLookup> {
     const pullRequestNumber = channel.state.pullRequestNumber;
     if (pullRequestNumber === null) {
-      return null;
+      return { kind: "not-found" };
     }
 
     try {
-      const response = await channel.github.request<unknown>({
-        method: "GET",
-        path: `${repoPath(channel.state.owner, channel.state.repo)}/issues/${pullRequestNumber}/comments?per_page=100&page=1`,
-      });
-      if (!Array.isArray(response.body)) {
-        throw new Error("GitHub comment list response was not an array");
-      }
-
       let existing: ExistingReviewSummary | null = null;
-      for (const comment of response.body) {
-        if (!isRecord(comment) || typeof comment.body !== "string") {
-          continue;
+      for (let page = 1; page <= MAX_COMMENT_PAGES; page += 1) {
+        const response = await channel.github.request<unknown>({
+          method: "GET",
+          path: `${repoPath(channel.state.owner, channel.state.repo)}/issues/${pullRequestNumber}/comments?per_page=${COMMENT_PAGE_SIZE}&page=${page}`,
+        });
+        if (!Array.isArray(response.body)) {
+          throw new Error("GitHub comment list response was not an array");
         }
-        if (!comment.body.includes(REVIEW_SUMMARY_MARKER)) {
-          continue;
+
+        for (const comment of response.body) {
+          if (!isRecord(comment) || typeof comment.body !== "string") {
+            continue;
+          }
+          if (
+            !comment.body.includes(REVIEW_SUMMARY_MARKER) ||
+            !isBotAuthoredSummary(comment, this.options.botName)
+          ) {
+            continue;
+          }
+          const id = safeCommentId(comment.id);
+          if (id !== null && (existing === null || id > existing.id)) {
+            // Comment ids are monotonic. Keep the newest marked comment if an
+            // earlier failed update left a duplicate behind, regardless of API
+            // response ordering.
+            existing = { id, reviewedHeadSha: reviewHeadFromSummary(comment.body) };
+          }
         }
-        const id = safeCommentId(comment.id);
-        if (id !== null && (existing === null || id > existing.id)) {
-          // Comment ids are monotonic. Keep the newest marked comment if an
-          // earlier failed update left a duplicate behind, regardless of API
-          // response ordering.
-          existing = { id, reviewedHeadSha: reviewHeadFromSummary(comment.body) };
+
+        if (response.body.length < COMMENT_PAGE_SIZE) {
+          return existing === null ? { kind: "not-found" } : { kind: "found", summary: existing };
         }
       }
-      return existing;
+      return existing === null ? { kind: "unavailable" } : { kind: "found", summary: existing };
     } catch (error) {
       logGitHubFailure(buildGitHubFailureContext(channel, checkRun, "comment.summary.list"), error);
-      return null;
+      return { kind: "unavailable" };
     }
   }
 }
+
+type ExistingReviewSummaryLookup =
+  | { readonly kind: "found"; readonly summary: ExistingReviewSummary }
+  | { readonly kind: "not-found" }
+  | { readonly kind: "unavailable" };
 
 interface ExistingReviewSummary {
   readonly id: number;
@@ -504,12 +690,56 @@ function reviewHeadFromSummary(body: string): string | null {
   return match?.[1] ?? null;
 }
 
+function reviewConversationKey(
+  owner: string,
+  repo: string,
+  pullRequestNumber: number | null,
+): string {
+  return `${owner.toLowerCase()}/${repo.toLowerCase()}#${pullRequestNumber ?? "unknown"}`;
+}
+
+function reviewLedgerKeys(
+  channel: GitHubEventContext,
+  checkRun: ReviewCheckRun | null,
+): readonly string[] {
+  const conversation = `conversation:${reviewConversationKey(
+    channel.state.owner,
+    channel.state.repo,
+    channel.state.pullRequestNumber,
+  )}`;
+  return checkRun === null ? [conversation] : [`check:${checkRun.id}`];
+}
+
+function isReviewHeadSha(value: string | null): value is string {
+  return value !== null && /^[0-9a-f]{7,64}$/iu.test(value);
+}
+
 function summaryBody(message: string, reviewedHeadSha: string | null): string {
-  const headMarker =
-    reviewedHeadSha && /^[0-9a-f]{7,64}$/iu.test(reviewedHeadSha)
-      ? `${REVIEW_HEAD_MARKER_PREFIX}${reviewedHeadSha}${REVIEW_HEAD_MARKER_SUFFIX}`
-      : null;
+  const headMarker = isReviewHeadSha(reviewedHeadSha)
+    ? `${REVIEW_HEAD_MARKER_PREFIX}${reviewedHeadSha}${REVIEW_HEAD_MARKER_SUFFIX}`
+    : null;
   return [REVIEW_SUMMARY_MARKER, headMarker, "", message].filter(Boolean).join("\n");
+}
+
+function stripReviewMarkers(message: string): string {
+  return message.replace(
+    /<!--\s*curl:review-summary\s*-->|<!--\s*curl:review-head:[0-9a-f]{7,64}\s*-->/giu,
+    "",
+  );
+}
+
+function isBotAuthoredSummary(comment: Record<string, unknown>, botName: string): boolean {
+  const user = comment.user;
+  if (!isRecord(user) || user.type !== "Bot") {
+    return false;
+  }
+  const login = typeof user.login === "string" ? user.login : null;
+  const normalizedBotName = normalizeBotName(botName);
+  return (
+    login !== null &&
+    normalizedBotName.length > 0 &&
+    login.toLowerCase() === `${normalizedBotName}[bot]`.toLowerCase()
+  );
 }
 
 function safeCommentId(value: unknown): number | null {
@@ -517,9 +747,9 @@ function safeCommentId(value: unknown): number | null {
 }
 
 function safeErrorId(details: unknown): string | null {
-  if (typeof details !== "object" || details === null || Array.isArray(details)) {
+  if (!isRecord(details)) {
     return null;
   }
-  const id = (details as { readonly errorId?: unknown }).errorId;
+  const id = details.errorId;
   return typeof id === "string" && /^[A-Za-z0-9_-]{1,128}$/u.test(id) ? id : null;
 }

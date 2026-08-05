@@ -3,10 +3,10 @@ import { includes, satisfies } from "eve/evals/expect";
 import { reviewPromptFromFixture } from "../lib/review-prompt";
 
 export default defineEval({
-  description: "Docs-only PR ships with no correctness/security findings.",
-  tags: ["review", "quality", "clean", "fixture"],
+  description: "Does not report an injection finding refuted by validation and query binding.",
+  tags: ["review", "quality", "refuted-candidate", "fixture"],
   async test(t) {
-    await t.send(await reviewPromptFromFixture("clean-docs.md"));
+    await t.send(await reviewPromptFromFixture("refuted-candidate.md"));
     t.succeeded();
     t.check(t.reply, includes("## Curl review"));
     t.check(t.reply, includes(/\*\*Verdict:\*\*\s*ship/i));
@@ -14,7 +14,7 @@ export default defineEval({
       t.reply,
       satisfies(
         (reply) => typeof reply === "string" && !/###\s+(Critical|High|Medium)/i.test(reply),
-        "no correctness or security finding",
+        "no unconfirmed finding",
       ),
     );
   },
