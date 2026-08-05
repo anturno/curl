@@ -13,6 +13,7 @@ dist
 .eve/junit.xml
 .agents
 .claude
+.devin
 
 # Maintainer-only notes (roadmap, product decisions, drafts).
 # Keep internal/README.md tracked so the convention is visible.
@@ -23,4 +24,3 @@ dist
 # Vercel CLI appends .env*; keep the example tracked.
 .env*
 !.env.example
-.devin/hooks.v1.json
