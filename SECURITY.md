@@ -5,7 +5,7 @@
 | Version | Supported |
 |---------|-----------|
 | Latest GitHub Release (`v0.1.x`) | Yes |
-| `main` | Yes — dogfood / best effort |
+| `main` | Yes — development / best effort |
 | Older minor lines | Best effort; upgrade when possible |
 
 Prefer consuming a **release tag**, not an arbitrary `main` commit, when self-hosting.

@@ -7,5 +7,7 @@ version releases and generate changelog entries.
 npx changeset
 ```
 
-On `main`, `changesets/action` opens a **Version Packages** PR. Merging that PR
-tags a GitHub Release (see `bun run release` in `package.json`).
+On `main`, `changesets/action` opens a **Version Packages** PR. After that PR
+merges, the release workflow runs deterministic checks and creates the
+application's `vX.Y.Z` Git tag and GitHub Release. This private application is
+not published to npm.
