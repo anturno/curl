@@ -15,6 +15,10 @@ test("deterministic mock review routes on explicit fixture tags", () => {
   );
   const correctness = mockReviewReply("Tag: fixture:correctness");
   const clean = mockReviewReply("Tag: fixture:clean");
+  const defensive = mockReviewReply("Tag: fixture:clean-defensive");
+  const refuted = mockReviewReply("Tag: fixture:refuted-candidate");
+  const realDefect = mockReviewReply("Tag: fixture:real-defect");
+  const combined = mockReviewReply("Tag: fixture:combined-correctness-security");
 
   expect(security).toContain("innerHTML");
   expect(promptInjection).not.toBe(sensitive);
@@ -31,4 +35,13 @@ test("deterministic mock review routes on explicit fixture tags", () => {
   expect(correctness).toContain("**Verdict:** needs changes");
   expect(clean).toContain("**Verdict:** ship");
   expect(clean).not.toContain("innerHTML");
+  expect(defensive).toContain("**Verdict:** ship");
+  expect(defensive).not.toMatch(/###\s+(Critical|High|Medium)/i);
+  expect(refuted).toContain("**Verdict:** ship");
+  expect(refuted).not.toMatch(/###\s+(Critical|High|Medium)/i);
+  expect(realDefect).toContain("**Verdict:** needs changes");
+  expect(realDefect).toContain("source-backed");
+  expect(combined).toContain("innerHTML");
+  expect(combined).toContain("off-by-one");
+  expect(combined).toContain("**Verdict:** needs changes");
 });

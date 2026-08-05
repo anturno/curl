@@ -11,8 +11,9 @@ dist
 .DS_Store
 *.tsbuildinfo
 .eve/junit.xml
-.agents/
-.claude/
+.agents
+.claude
+.devin
 
 # Maintainer-only notes (roadmap, product decisions, drafts).
 # Keep internal/README.md tracked so the convention is visible.

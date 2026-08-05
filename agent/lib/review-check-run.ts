@@ -3,7 +3,6 @@ import type { SessionAuthContext } from "eve/context";
 import { reviewConfig } from "./config";
 import { isRecord, readSafeInteger, repoPath } from "./github-api";
 import { logGitHubFailure } from "./github-failure";
-import { resolvePullRequestHeadSha } from "./review-head";
 
 /** Check run name shown in the PR Checks tab. */
 export const CURL_REVIEW_CHECK_NAME = "Curl review";
@@ -144,10 +143,7 @@ export async function findReviewCheckRunForChannel(
   if (!reviewConfig.github.checkRunsEnabled || channel.state.pullRequestNumber === null) {
     return null;
   }
-  const { owner, repo, pullRequestNumber } = channel.state;
-  const headSha =
-    channel.state.headSha ??
-    (await resolvePullRequestHeadSha(channel.github, owner, repo, pullRequestNumber));
+  const { headSha, owner, repo, pullRequestNumber } = channel.state;
   if (!headSha) {
     return null;
   }

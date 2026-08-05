@@ -90,7 +90,7 @@ export function shouldDispatchBotMention(input: {
   readonly body: string;
   readonly botName: string;
 }): boolean {
-  const botName = input.botName.trim();
+  const botName = normalizeBotName(input.botName);
   if (!botName) {
     return false;
   }
@@ -106,6 +106,10 @@ export function shouldDispatchBotMention(input: {
   }
   const mention = new RegExp(`@${escapeRegExp(botName)}(?=$|[^A-Za-z0-9_-])`, "iu");
   return mention.test(input.body);
+}
+
+export function normalizeBotName(botName: string): string {
+  return botName.trim().replace(/\[bot\]$/iu, "");
 }
 
 function escapeRegExp(value: string): string {
