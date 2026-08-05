@@ -1,64 +1,23 @@
 import type { GitHubEventContext, GitHubHandle } from "eve/channels/github";
+import type { SessionAuthContext } from "eve/context";
+import { reviewConfig } from "./config";
+import { isRecord, readSafeInteger, repoPath } from "./github-api";
+import { logGitHubFailure } from "./github-failure";
+import { resolvePullRequestHeadSha } from "./review-head";
 
 /** Check run name shown in the PR Checks tab. */
 export const CURL_REVIEW_CHECK_NAME = "Curl review";
 
-const COMMENT_MAX = 65_536;
-const CHECK_TEXT_MAX = 65_535;
+const CHECK_RUN_ID_ATTRIBUTE = "curl:review-check-run-id";
+const CHECK_RUN_SHA_ATTRIBUTE = "curl:review-check-run-sha";
 
-type CheckConclusion = "cancelled" | "failure" | "neutral" | "success" | "timed_out";
-
-interface CheckRunListBody {
-  readonly check_runs?: readonly { readonly id?: number }[];
+interface CheckRunBody {
+  readonly id?: unknown;
 }
 
-interface PullRequestBody {
-  readonly head?: { readonly sha?: string };
-}
-
-function checksEnabled(): boolean {
-  return process.env.CURL_CHECK_RUN !== "0";
-}
-
-function repoPath(owner: string, repo: string): string {
-  return `/repos/${owner}/${repo}`;
-}
-
-function truncate(text: string, max: number): string {
-  if (text.length <= max) {
-    return text;
-  }
-  return `${text.slice(0, Math.max(0, max - 1))}…`;
-}
-
-function extractVerdict(message: string): string | null {
-  const match = /\*\*Verdict:\*\*\s*(.+)/i.exec(message);
-  const verdict = match?.[1]?.trim();
-  return verdict && verdict.length > 0 ? verdict : null;
-}
-
-/** Split long bodies the way GitHub comment limits require. */
-export function splitCommentBody(body: string, maxLength = COMMENT_MAX): string[] {
-  if (body.length <= maxLength) {
-    return [body];
-  }
-  const chunks: string[] = [];
-  let rest = body;
-  while (rest.length > maxLength) {
-    let splitAt = rest.lastIndexOf("\n", maxLength);
-    if (splitAt < maxLength * 0.5) {
-      splitAt = rest.lastIndexOf(" ", maxLength);
-    }
-    if (splitAt < maxLength * 0.5) {
-      splitAt = maxLength;
-    }
-    chunks.push(rest.slice(0, splitAt).trimEnd());
-    rest = rest.slice(splitAt).trimStart();
-  }
-  if (rest.length > 0) {
-    chunks.push(rest);
-  }
-  return chunks;
+export interface ReviewCheckRun {
+  readonly headSha: string;
+  readonly id: number;
 }
 
 async function findInProgressCheckRunId(
@@ -67,58 +26,70 @@ async function findInProgressCheckRunId(
   repo: string,
   headSha: string,
 ): Promise<number | null> {
-  const response = await github.request<CheckRunListBody>({
+  const response = await github.request<unknown>({
     method: "GET",
     path: `${repoPath(owner, repo)}/commits/${headSha}/check-runs?check_name=${encodeURIComponent(CURL_REVIEW_CHECK_NAME)}&status=in_progress&filter=latest`,
   });
-  const id = response.body.check_runs?.[0]?.id;
-  return typeof id === "number" ? id : null;
-}
-
-/** Resolve the PR head SHA when the inbound event did not include it. */
-export async function resolvePullRequestHeadSha(
-  github: GitHubHandle,
-  owner: string,
-  repo: string,
-  pullRequestNumber: number,
-): Promise<string | null> {
-  try {
-    const response = await github.request<PullRequestBody>({
-      method: "GET",
-      path: `${repoPath(owner, repo)}/pulls/${pullRequestNumber}`,
-    });
-    const sha = response.body.head?.sha;
-    return typeof sha === "string" && sha.length > 0 ? sha : null;
-  } catch {
-    return null;
+  if (!isRecord(response.body) || !Array.isArray(response.body.check_runs)) {
+    throw new Error("GitHub check-run list response was not an object with check_runs");
   }
+
+  for (const checkRun of response.body.check_runs) {
+    if (!isRecord(checkRun)) {
+      continue;
+    }
+    const id = readSafeInteger(checkRun.id);
+    const status = checkRun.status;
+    if (id !== null && (status === undefined || status === "in_progress")) {
+      return id;
+    }
+  }
+  return null;
 }
 
 /**
  * Opens (or reuses) an in-progress "Curl review" check run for a commit.
  * Errors are swallowed so a missing Checks permission never blocks the review.
+ * The lookup prevents common duplicates; GitHub does not provide a supported
+ * idempotency key for this endpoint, so this code does not invent one.
  */
 export async function startReviewCheckRun(input: {
   readonly github: GitHubHandle;
   readonly headSha: string | null | undefined;
   readonly owner: string;
+  readonly pullRequestNumber?: number | null;
   readonly repo: string;
-}): Promise<void> {
-  if (!checksEnabled()) {
-    return;
+}): Promise<ReviewCheckRun | null> {
+  if (!reviewConfig.github.checkRunsEnabled) {
+    return null;
   }
-  const { github, owner, repo, headSha } = input;
+  const { github, owner, repo, headSha, pullRequestNumber } = input;
   if (!headSha) {
-    return;
+    return null;
+  }
+
+  let existing: number | null;
+  try {
+    existing = await findInProgressCheckRunId(github, owner, repo, headSha);
+  } catch (error) {
+    logGitHubFailure(
+      {
+        owner,
+        repo,
+        pullRequestNumber,
+        headSha,
+        operation: "check-run.list-in-progress",
+      },
+      error,
+    );
+    return null;
+  }
+  if (existing !== null) {
+    return { headSha, id: existing };
   }
 
   try {
-    const existing = await findInProgressCheckRunId(github, owner, repo, headSha);
-    if (existing !== null) {
-      return;
-    }
-
-    await github.request({
+    const response = await github.request<CheckRunBody>({
       method: "POST",
       path: `${repoPath(owner, repo)}/check-runs`,
       body: {
@@ -131,103 +102,106 @@ export async function startReviewCheckRun(input: {
         },
       },
     });
-  } catch {
-    // Missing Checks: write, transient API errors, etc.
+    const id = readSafeInteger(response.body.id);
+    if (id === null) {
+      logGitHubFailure(
+        {
+          owner,
+          repo,
+          pullRequestNumber,
+          headSha,
+          operation: "check-run.create-response",
+        },
+        new Error("GitHub check-run create response did not include a valid id"),
+      );
+      return null;
+    }
+    return { headSha, id };
+  } catch (error) {
+    logGitHubFailure(
+      {
+        owner,
+        repo,
+        pullRequestNumber,
+        headSha,
+        operation: "check-run.create",
+      },
+      error,
+    );
+    return null;
   }
 }
 
 /**
- * Completes the in-progress check run for the current PR head.
- * Uses conclusion `neutral` by default so findings never block merges.
+ * Find the in-progress run for the persisted event head. This is used by the
+ * session.failed hook, whose Eve contract intentionally has no SessionContext.
+ * Prefer the durable state SHA over a fresh PR lookup so a changed head cannot
+ * make an older run look like the current run.
  */
-export async function completeReviewCheckRun(
+export async function findReviewCheckRunForChannel(
   channel: GitHubEventContext,
-  input: {
-    readonly conclusion?: CheckConclusion;
-    readonly summary: string;
-    readonly title: string;
-    readonly text?: string;
-  },
-): Promise<void> {
-  if (!checksEnabled()) {
-    return;
+): Promise<ReviewCheckRun | null> {
+  if (!reviewConfig.github.checkRunsEnabled || channel.state.pullRequestNumber === null) {
+    return null;
   }
-  const { owner, repo, headSha, pullRequestNumber } = channel.state;
-  if (pullRequestNumber === null || !headSha) {
-    return;
+  const { owner, repo, pullRequestNumber } = channel.state;
+  const headSha =
+    channel.state.headSha ??
+    (await resolvePullRequestHeadSha(channel.github, owner, repo, pullRequestNumber));
+  if (!headSha) {
+    return null;
   }
 
   try {
-    const checkRunId = await findInProgressCheckRunId(channel.github, owner, repo, headSha);
-    if (checkRunId === null) {
-      return;
-    }
-
-    const summary = truncate(input.summary, CHECK_TEXT_MAX);
-    const text = input.text ? truncate(input.text, CHECK_TEXT_MAX) : undefined;
-
-    await channel.github.request({
-      method: "PATCH",
-      path: `${repoPath(owner, repo)}/check-runs/${checkRunId}`,
-      body: {
-        status: "completed",
-        conclusion: input.conclusion ?? "neutral",
-        output: {
-          title: truncate(input.title, 255),
-          summary,
-          ...(text ? { text } : {}),
-        },
+    const id = await findInProgressCheckRunId(channel.github, owner, repo, headSha);
+    return id === null ? null : { headSha, id };
+  } catch (error) {
+    logGitHubFailure(
+      {
+        owner,
+        repo,
+        pullRequestNumber,
+        headSha,
+        operation: "check-run.find-for-session-failure",
       },
-    });
-  } catch {
-    // Same as start — never fail the turn over check-run bookkeeping.
+      error,
+    );
+    return null;
   }
 }
 
-/** Build check-run copy from a finished review comment body. */
-export function reviewCheckOutput(message: string): {
-  readonly summary: string;
-  readonly title: string;
-  readonly text: string;
-} {
-  const verdict = extractVerdict(message);
+/** Carry the check reference through Eve's durable session auth metadata. */
+export function withReviewCheckRun(
+  auth: SessionAuthContext,
+  checkRun: ReviewCheckRun | null,
+): SessionAuthContext {
+  if (checkRun === null) {
+    return auth;
+  }
   return {
-    title: verdict ? `Verdict: ${verdict}` : "Review complete",
-    summary: verdict
-      ? `Curl finished with verdict **${verdict}**. Full findings are in the PR comment and below.`
-      : "Curl finished reviewing. Full findings are in the PR comment and below.",
-    text: message,
+    ...auth,
+    attributes: {
+      ...auth.attributes,
+      [CHECK_RUN_ID_ATTRIBUTE]: String(checkRun.id),
+      [CHECK_RUN_SHA_ATTRIBUTE]: checkRun.headSha,
+    },
   };
 }
 
-/**
- * Whether a timeline/review comment should dispatch a bot turn.
- * Mirrors eve's default mention gate closely enough for Curl.
- */
-export function shouldDispatchBotMention(input: {
-  readonly authorLogin?: string;
-  readonly authorType?: string;
-  readonly body: string;
-  readonly botName: string;
-}): boolean {
-  const botName = input.botName.trim();
-  if (!botName) {
-    return false;
+/** Read a check reference without exposing arbitrary auth metadata. */
+export function reviewCheckRunFromAuth(
+  auth: SessionAuthContext | null | undefined,
+): ReviewCheckRun | null {
+  const id = auth?.attributes[CHECK_RUN_ID_ATTRIBUTE];
+  const headSha = auth?.attributes[CHECK_RUN_SHA_ATTRIBUTE];
+  if (
+    typeof id !== "string" ||
+    !/^\d+$/u.test(id) ||
+    typeof headSha !== "string" ||
+    headSha.length === 0
+  ) {
+    return null;
   }
-  if (input.body.includes("<!-- eve:github:")) {
-    return false;
-  }
-  if (input.authorType === "Bot") {
-    return false;
-  }
-  const botLogin = `${botName}[bot]`.toLowerCase();
-  if (input.authorLogin?.toLowerCase() === botLogin) {
-    return false;
-  }
-  const mention = new RegExp(`@${escapeRegExp(botName)}(?=$|[^A-Za-z0-9_-])`, "iu");
-  return mention.test(input.body);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const numericId = readSafeInteger(Number(id));
+  return numericId === null ? null : { headSha, id: numericId };
 }

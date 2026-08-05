@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["agent/**", "evals/**", "*.json"]
+    "includes": ["agent/**", "evals/**", "scripts/**", "tests/**", "*.json"]
   },
   "formatter": {
     "enabled": true,

@@ -9,12 +9,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  release:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
 
@@ -29,11 +28,89 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
-      - name: Create Release PR or publish
+      - name: Check (Biome)
+        run: bun run check
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Tests
+        run: bun test
+
+      - name: Build
+        run: bun run build
+
+      - name: Verify configuration (offline)
+        run: bun run verify:config
+        env:
+          CURL_EVAL_MOCK: "1"
+
+      - name: Evals (fixture format gates)
+        run: bun run eval
+        env:
+          CURL_EVAL_MOCK: "1"
+
+  version:
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Create or update Version Packages PR
         uses: changesets/action@v1
         with:
-          publish: bun run release
+          version: bun run version-packages
           title: Version Packages
           commit: Version Packages
+          createGithubReleases: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect merged version commit
+        id: version-commit
+        shell: bash
+        run: |
+          current_version="$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')"
+          previous_version="$(git show HEAD^:package.json | node -e 'let input = ""; process.stdin.on("data", (chunk) => (input += chunk)); process.stdin.on("end", () => process.stdout.write(JSON.parse(input).version));')"
+          commit_subject="$(git log -1 --pretty=%s)"
+          is_version_commit=false
+          if [[ "$commit_subject" == "Version Packages"* || "$commit_subject" == "Merge pull request"* ]]; then
+            is_version_commit=true
+          fi
+          if [[ "$current_version" != "$previous_version" && "$is_version_commit" == "true" ]]; then
+            echo "should-release=true" >> "$GITHUB_OUTPUT"
+            echo "version=$current_version" >> "$GITHUB_OUTPUT"
+          else
+            echo "should-release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create application tag and GitHub Release
+        if: steps.version-commit.outputs.should-release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version-commit.outputs.version }}
+        run: |
+          tag="v${VERSION}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "GitHub Release $tag already exists."
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --title "Curl $tag" --generate-notes
+          fi

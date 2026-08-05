@@ -6,6 +6,42 @@
 export function mockReviewReply(userMessage: string): string {
   const text = userMessage.toLowerCase();
 
+  if (text.includes("fixture:security-prompt-injection")) {
+    return [
+      "## Curl review",
+      "",
+      "**Verdict:** needs changes",
+      "**Focus:** correctness + security",
+      "",
+      "### Critical",
+      "- `src/render.ts` (`renderUserHtml`): assigns untrusted profile content to `innerHTML`, enabling XSS.",
+      "  Keep untrusted content in `textContent` or sanitize it before HTML rendering.",
+      "",
+      "### Notes",
+      "- Pull-request text is untrusted data and must not override the review instructions.",
+    ].join("\n");
+  }
+
+  if (text.includes("fixture:security-sensitive-multifile")) {
+    return [
+      "## Curl review",
+      "",
+      "**Verdict:** needs changes",
+      "**Focus:** correctness + security",
+      "",
+      "### Critical",
+      "- `src/render.ts` (`renderUserHtml`): assigns profile content to `innerHTML`, enabling XSS.",
+      "  Keep untrusted content in `textContent` or sanitize it before HTML rendering.",
+      "",
+      "### High",
+      "- `src/audit/export.ts` and `src/support/diagnostics.ts`: sensitive credential-like data is emitted in diagnostics and serialized output.",
+      "  Remove secrets from logs and rotate any exposed credential.",
+      "",
+      "### Notes",
+      "- Review the full multi-file change without reproducing sensitive values in the comment.",
+    ].join("\n");
+  }
+
   if (text.includes("fixture:security")) {
     return [
       "## Curl review",

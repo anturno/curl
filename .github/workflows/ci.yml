@@ -36,8 +36,16 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Tests
+        run: bun test
+
       - name: Build
         run: bun run build
+
+      - name: Verify configuration (offline)
+        run: bun run verify:config
+        env:
+          CURL_EVAL_MOCK: "1"
 
       - name: Evals (fixture format gates)
         run: bun run eval
