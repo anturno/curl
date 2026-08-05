@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+### Minor Changes
+
+- [#10](https://github.com/anturno/curl/pull/10) [`d7256f6`](https://github.com/anturno/curl/commit/d7256f6d57b559cf6c4b101f57aeb6002b1ceeaa) Thanks [@JLeonStack](https://github.com/JLeonStack)! - Add GitHub Check Run progress and sticky review summaries, make automatic review explicitly opt-in and repository-scoped, harden the read-only sandbox and configuration validation, and add deterministic test/eval and release gates.
+
 All notable changes to Anturno Curl are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
