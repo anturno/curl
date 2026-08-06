@@ -47,6 +47,7 @@
     "@vercel/connect": "^0.6.1",
     "ai": "^7.0.38",
     "eve": "^0.29.5",
+    "just-bash": "3.2.0",
     "zod": "4.4.3"
   },
   "devDependencies": {

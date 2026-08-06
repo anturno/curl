@@ -1,7 +1,16 @@
 import { connectGitHubCredentials } from "@vercel/connect/eve";
 import { defaultGitHubAuth, githubChannel } from "eve/channels/github";
 import { reviewConfig } from "../lib/config";
+import {
+  closeAllRememberedCurlOsSessions,
+  closeRememberedCurlOsSession,
+} from "../lib/curlos-session";
+import { openGitHubCurlOs } from "../lib/github-checkout";
 import { createReviewWorkflow } from "../lib/review-workflow";
+
+async function closeCurlOs(ctx: { getSandbox(): Promise<{ readonly id: string }> }): Promise<void> {
+  await closeRememberedCurlOsSession((await ctx.getSandbox()).id);
+}
 
 /**
  * Bot mention slug. Prefer matching the GitHub App / Connect connector name.
@@ -53,6 +62,11 @@ export default githubChannel({
       type: "pull_request",
     }),
   events: {
+    async "turn.started"(_data, channel, ctx) {
+      await channel.thread.react("eyes");
+      await openGitHubCurlOs(channel, await ctx.getSandbox());
+    },
+
     async "message.completed"(data, channel, ctx) {
       await reviewWorkflow.handle({
         auth: ctx.session.auth.current,
@@ -64,36 +78,52 @@ export default githubChannel({
     },
 
     async "turn.completed"(_data, channel, ctx) {
-      await reviewWorkflow.handle({
-        auth: ctx.session.auth.current,
-        channel,
-        type: "turn.completed",
-      });
+      try {
+        await reviewWorkflow.handle({
+          auth: ctx.session.auth.current,
+          channel,
+          type: "turn.completed",
+        });
+      } finally {
+        await closeCurlOs(ctx);
+      }
     },
 
     async "turn.cancelled"(_data, channel, ctx) {
-      await reviewWorkflow.handle({
-        auth: ctx.session.auth.current,
-        channel,
-        type: "turn.cancelled",
-      });
+      try {
+        await reviewWorkflow.handle({
+          auth: ctx.session.auth.current,
+          channel,
+          type: "turn.cancelled",
+        });
+      } finally {
+        await closeCurlOs(ctx);
+      }
     },
 
     async "turn.failed"(data, channel, ctx) {
-      await reviewWorkflow.handle({
-        auth: ctx.session.auth.current,
-        channel,
-        details: data.details,
-        type: "turn.failed",
-      });
+      try {
+        await reviewWorkflow.handle({
+          auth: ctx.session.auth.current,
+          channel,
+          details: data.details,
+          type: "turn.failed",
+        });
+      } finally {
+        await closeCurlOs(ctx);
+      }
     },
 
     async "session.failed"(data, channel) {
-      await reviewWorkflow.handle({
-        channel,
-        details: data.details,
-        type: "session.failed",
-      });
+      try {
+        await reviewWorkflow.handle({
+          channel,
+          details: data.details,
+          type: "session.failed",
+        });
+      } finally {
+        await closeAllRememberedCurlOsSessions();
+      }
     },
   },
 });
