@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+### Patch Changes
+
+- [#12](https://github.com/anturno/curl/pull/12) [`1966b32`](https://github.com/anturno/curl/commit/1966b32d63005b404677e719c3be309f00acaa2f) Thanks [@JLeonStack](https://github.com/JLeonStack)! - Harden sticky review summary delivery by binding updates to Curl's bot identity, following paginated comments, and preserving current-head summaries during stale or retrying reviews. Add labeled quality eval fixtures for defensive, refuted, real-defect, and combined reviews.
+
 ## 0.2.0
 
 ### Minor Changes
