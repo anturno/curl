@@ -1,11 +1,11 @@
-import { connectGitHubCredentials } from "@vercel/connect/eve";
-import { defaultGitHubAuth, githubChannel } from "eve/channels/github";
-import { reviewConfig } from "../lib/config";
 import {
   closeAllRememberedCurlOsSessions,
   closeRememberedCurlOsSession,
-} from "../lib/curlos-session";
-import { openGitHubCurlOs } from "../lib/github-checkout";
+} from "@anturno/curlos/eve";
+import { openGitHubCurlOs } from "@anturno/curlos/github";
+import { connectGitHubCredentials } from "@vercel/connect/eve";
+import { defaultGitHubAuth, githubChannel } from "eve/channels/github";
+import { reviewConfig } from "../lib/config";
 import { createReviewWorkflow } from "../lib/review-workflow";
 
 async function closeCurlOs(ctx: { getSandbox(): Promise<{ readonly id: string }> }): Promise<void> {

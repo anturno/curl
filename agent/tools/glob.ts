@@ -1,7 +1,7 @@
+import { CURL_OS_LIMITS, type CurlOsGlobInput } from "@anturno/curlos";
+import { curlOsForSandbox } from "@anturno/curlos/eve";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { CURL_OS_LIMITS, type CurlOsGlobInput } from "../lib/curlos";
-import { curlOsForSandbox } from "../lib/curlos-runtime";
 
 export default defineTool({
   description:

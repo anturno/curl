@@ -48,6 +48,7 @@ when a review or deployment does not behave as expected.
 - [Configuration](./docs/configuration.md)
 - [Troubleshooting](./docs/troubleshooting.md)
 - [Architecture](./docs/architecture.md)
+- [CurlOS](https://github.com/anturno/curlos) — read-only review workspace runtime
 - [Contributing](./CONTRIBUTING.md)
 - [Security](./SECURITY.md)
 - [Changelog](./CHANGELOG.md)
