@@ -75,7 +75,13 @@ Curl sends the pull-request metadata, diff, review instructions, and any reposit
 
 The GitHub installation token is used by the channel/runtime and is not copied into the sandbox. Keep `OPENCODE_API_KEY`, App keys, webhook secrets, and other credentials in the deployment secret store; do not put them in prompts, fixtures, or repository files. Curl's default review is read-only: its Bash, web, and write-file tools are disabled, and its instructions prohibit executing repository code or changing the checkout.
 
-The configured sandbox starts with deny-all networking on Docker, microsandbox, and Vercel backends. On a firewall-capable deployed backend, the GitHub checkout temporarily uses Eve's credential-brokered GitHub-only egress; credentials are not placed in the checkout. Local fallback backends may skip the checkout. These controls limit the agent's sandbox; they do not replace GitHub App permissions, deployment secret controls, or provider privacy review.
+Curl uses its own `just-bash` sandbox backend. Each session gets a private
+in-memory `/workspace`; the guest has no network, credentials, interpreters,
+package scripts, or long-lived processes. The channel uses its authenticated
+GitHub API handle to materialize bounded repository blobs before the review,
+so the installation token never enters the sandbox. These controls limit the
+agent's sandbox; they do not replace GitHub App permissions, deployment secret
+controls, or provider privacy review.
 
 ## Token and session limits
 

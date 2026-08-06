@@ -42,6 +42,24 @@ The deployed entry points are intentionally thin composition roots:
 - `agent/lib/agent-runtime.ts` composes the provider model and runtime guards
   from validated configuration; provider construction is not part of the Eve
   channel adapter.
+- `agent/sandbox.ts` wires `@anturno/curlos/sandbox` (just-bash Eve backend).
+- CurlOS ([anturno/curlos](https://github.com/anturno/curlos)) owns the review
+  workspace: policy, session API, host adapters, and GitHub checkout provider.
+  Tools use `@anturno/curlos` / `@anturno/curlos/eve`; the GitHub channel opens
+  sessions via `@anturno/curlos/github`.
+
+## CurlOS boundary
+
+CurlOS confines model-facing reads and searches to `/workspace`, bounds their
+inputs and outputs, and exposes no model-controlled write, shell, network, or
+process capability. The custom sandbox uses just-bash's in-memory virtual
+filesystem, has no guest network, and only permits bounded `find`/`grep`
+commands. This is a small application-owned backend inspired by AgentOS's
+capability model, not a copy of its Rust kernel or VFS.
+
+Canonical docs and the `@anturno/curlos` package live in
+[anturno/curlos](https://github.com/anturno/curlos). See the local pointer
+[`curlos.md`](./curlos.md).
 
 The workflow interface is the test surface. Tests provide fake Eve GitHub
 contexts and GitHub request responses, so lifecycle behavior can be verified

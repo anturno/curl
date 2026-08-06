@@ -14,6 +14,7 @@ dist
 .agents
 .claude
 .devin
+.cursor
 
 # Maintainer-only notes (roadmap, product decisions, drafts).
 # Keep internal/README.md tracked so the convention is visible.
