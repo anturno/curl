@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3
+
+### Patch Changes
+
+- [#19](https://github.com/anturno/curl/pull/19) [`0f883a2`](https://github.com/anturno/curl/commit/0f883a21ce8a1e93ae4b6493d315ab76af6865f5) Thanks [@JLeonStack](https://github.com/JLeonStack)! - Adopt the released CurlOS Eve-first review runtime for diff-only workspaces,
+  canonical inspect tools, and review-session reuse across turns.
+
 ## 0.2.2
 
 ### Patch Changes
