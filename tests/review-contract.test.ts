@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildReviewPolicyPlan,
   DEFAULT_REVIEW_POLICY,
   parsePolicyDocument,
   parseReviewCandidate,
@@ -178,6 +179,71 @@ describe("review contract", () => {
     });
   });
 
+  test("omits generated files from normal analysis but retains scrutinized files", () => {
+    const files = [
+      { path: "generated/client.ts", changedLines: [12] },
+      { path: "src/runner.ts", changedLines: [12] },
+      { path: "migrations/001.sql", changedLines: [12] },
+    ];
+    const plan = buildReviewPolicyPlan(files, {
+      ...DEFAULT_REVIEW_POLICY,
+      generatedPaths: ["generated/**"],
+      extraScrutinyPaths: ["src/**"],
+      securitySensitivePaths: ["migrations/**"],
+    });
+
+    expect(plan.analysisFiles.map((file) => file.path)).toEqual([
+      "src/runner.ts",
+      "migrations/001.sql",
+    ]);
+    expect(plan.generatedFiles.map((file) => file.path)).toEqual(["generated/client.ts"]);
+    expect(plan.scrutinizedPaths).toEqual(["src/runner.ts", "migrations/001.sql"]);
+  });
+
+  test("rejects policy scope that names an unchanged or unsafe path", () => {
+    const candidate = {
+      ...validCandidate(),
+      scrutinizedPaths: ["src/runner.ts", "src/not-changed.ts"],
+    };
+    expect(validateReview(candidate, context)).toEqual({
+      ok: false,
+      reason: "invalid-semantic-content",
+    });
+    expect(
+      validateReview({ ...validCandidate(), scrutinizedPaths: ["../src/runner.ts"] }, context),
+    ).toEqual({
+      ok: false,
+      reason: "invalid-semantic-content",
+    });
+  });
+
+  test("validates evidence before suppressing below-threshold findings", () => {
+    const policyContext = {
+      ...context,
+      policy: { ...DEFAULT_REVIEW_POLICY, minimumPublicationSeverity: "high" as const },
+    };
+    expect(
+      validateReview(
+        validCandidate({
+          evidence: "This could be a potential problem with the change.",
+          severity: "low",
+        }),
+        policyContext,
+      ),
+    ).toEqual({
+      ok: false,
+      reason: "invalid-semantic-content",
+    });
+    expect(validateReview(validCandidate({ severity: "low" }), policyContext)).toMatchObject({
+      ok: true,
+      review: {
+        findings: [],
+        notes: ["1 candidate finding(s) were withheld by repository policy."],
+        verdict: "clean",
+      },
+    });
+  });
+
   test("deduplicates and orders findings before rendering", () => {
     const candidate: ReviewCandidate = {
       findings: [
@@ -331,13 +397,39 @@ describe("review contract", () => {
       auth: null,
       channel: mockChannel(posted),
       finishReason: "stop",
-      message: "The code looks good.",
+      message:
+        'ProviderError: prompt="ignore the review contract" credential="provider-secret" source="src/runner.ts"',
       type: "message.completed",
     });
 
     expect(posted).toHaveLength(1);
     expect(posted[0]).toContain("could not validate");
-    expect(posted[0]).not.toContain("The code looks good.");
+    expect(posted[0]).not.toContain("ProviderError");
+    expect(posted[0]).not.toContain("ignore the review contract");
+    expect(posted[0]).not.toContain("provider-secret");
+    expect(posted[0]).not.toContain("src/runner.ts");
+  });
+
+  test("does not post raw provider failures", async () => {
+    const posted: string[] = [];
+    const workflow = createReviewWorkflow({ botName: "anturno-curl" });
+
+    await workflow.handle({
+      auth: null,
+      channel: mockChannel(posted),
+      details: {
+        error:
+          'ProviderError: prompt="system prompt" credential="provider-secret" source="src/runner.ts"',
+      },
+      type: "turn.failed",
+    });
+
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toContain("hit an error");
+    expect(posted[0]).not.toContain("ProviderError");
+    expect(posted[0]).not.toContain("system prompt");
+    expect(posted[0]).not.toContain("provider-secret");
+    expect(posted[0]).not.toContain("src/runner.ts");
   });
 
   test("renders one validated summary for a PR", async () => {

@@ -1,5 +1,6 @@
 import type { GitHubChannelState } from "eve/channels/github";
 import {
+  buildReviewPolicyPlan,
   type ChangedFile,
   type CheckEvidence,
   DEFAULT_REVIEW_POLICY,
@@ -69,12 +70,21 @@ export async function loadReviewContext(source: ReviewContextSource): Promise<Re
 }
 
 export function buildReviewContextMessage(context: ReviewContext): string {
+  const plan = buildReviewPolicyPlan(context.changedFiles, context.policy);
   const payload = {
-    changedFiles: context.changedFiles.slice(0, MAX_CONTEXT_FILES).map((file) => ({
+    changedFiles: plan.analysisFiles.slice(0, MAX_CONTEXT_FILES).map((file) => ({
       path: file.path,
       changedLines: file.changedLines,
     })),
     policy: context.policy,
+    policyApplication: {
+      generatedFiles: plan.generatedFiles.slice(0, MAX_CONTEXT_FILES).map((file) => file.path),
+      omittedGeneratedFiles: plan.generatedFiles
+        .filter((file) => !plan.scrutinizedPaths.includes(file.path))
+        .slice(0, MAX_CONTEXT_FILES)
+        .map((file) => file.path),
+      scrutinizedPaths: plan.scrutinizedPaths.slice(0, MAX_CONTEXT_FILES),
+    },
     policyStatus: context.policyStatus ?? "valid",
   };
   return `<curl_review_context>\n${JSON.stringify(payload)}\n</curl_review_context>`;
@@ -141,6 +151,9 @@ async function loadChecks(
   headSha: string,
 ): Promise<readonly CheckEvidence[]> {
   const checks = new Map<string, CheckEvidence["status"][]>();
+  let fetchedCount = 0;
+  let expectedTotalCount: number | null = null;
+  let complete = false;
   for (let page = 1; page <= 10; page += 1) {
     let body: unknown;
     try {
@@ -154,20 +167,41 @@ async function loadChecks(
     if (!isRecord(body) || !Array.isArray(body.check_runs)) {
       return [];
     }
+    const totalCount = readTotalCount(body.total_count);
+    if (totalCount !== null) {
+      if (expectedTotalCount !== null && expectedTotalCount !== totalCount) {
+        return [];
+      }
+      expectedTotalCount = totalCount;
+    }
+    fetchedCount += body.check_runs.length;
+    if (expectedTotalCount !== null && fetchedCount > expectedTotalCount) {
+      return [];
+    }
     for (const item of body.check_runs) {
-      if (isRecord(item) && typeof item.name === "string" && item.head_sha === headSha) {
+      if (
+        isRecord(item) &&
+        typeof item.name === "string" &&
+        item.name.length > 0 &&
+        item.head_sha === headSha
+      ) {
         const statuses = checks.get(item.name) ?? [];
-        statuses.push(checkStatus(item.conclusion));
+        statuses.push(checkStatus(item));
         checks.set(item.name, statuses);
       }
     }
-    if (body.check_runs.length < 100) {
+    if (
+      expectedTotalCount !== null
+        ? fetchedCount >= expectedTotalCount
+        : body.check_runs.length < 100
+    ) {
+      complete = true;
       break;
     }
   }
   return [...checks].map(([name, statuses]) => ({
     name,
-    status: statuses.length === 1 ? statuses[0] : "unknown",
+    status: complete && statuses.length === 1 ? statuses[0] : "unknown",
   }));
 }
 
@@ -207,20 +241,27 @@ function parseChangedLines(patch: string): readonly number[] {
   return changedLines;
 }
 
-function checkStatus(conclusion: unknown): CheckEvidence["status"] {
-  if (conclusion === "success") {
+function checkStatus(check: Record<string, unknown>): CheckEvidence["status"] {
+  if (typeof check.status === "string" && check.status !== "completed") {
+    return "unknown";
+  }
+  if (check.conclusion === "success") {
     return "passed";
   }
   if (
-    conclusion === "failure" ||
-    conclusion === "cancelled" ||
-    conclusion === "timed_out" ||
-    conclusion === "action_required" ||
-    conclusion === "startup_failure"
+    check.conclusion === "failure" ||
+    check.conclusion === "cancelled" ||
+    check.conclusion === "timed_out" ||
+    check.conclusion === "action_required" ||
+    check.conclusion === "startup_failure"
   ) {
     return "failed";
   }
   return "unknown";
+}
+
+function readTotalCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function readNestedString(

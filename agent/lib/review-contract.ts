@@ -73,6 +73,14 @@ export interface ReviewContext {
   readonly policy: ReviewPolicy;
 }
 
+export interface ReviewPolicyPlan {
+  readonly analysisFiles: readonly ChangedFile[];
+  readonly generatedFiles: readonly ChangedFile[];
+  readonly extraScrutinyPaths: readonly string[];
+  readonly securitySensitivePaths: readonly string[];
+  readonly scrutinizedPaths: readonly string[];
+}
+
 export interface ValidatedReview {
   readonly findings: readonly ReviewFinding[];
   readonly notes: readonly string[];
@@ -143,6 +151,33 @@ export function parseReviewPolicy(value: unknown): ReviewPolicy | null {
   return result.data;
 }
 
+export function buildReviewPolicyPlan(
+  changedFiles: readonly ChangedFile[],
+  policy: ReviewPolicy,
+): ReviewPolicyPlan {
+  const generatedFiles = changedFiles.filter((file) =>
+    isMatchedPath(file.path, policy.generatedPaths),
+  );
+  const extraScrutinyPaths = changedFiles
+    .filter((file) => isMatchedPath(file.path, policy.extraScrutinyPaths))
+    .map((file) => file.path);
+  const securitySensitivePaths = changedFiles
+    .filter((file) => isMatchedPath(file.path, policy.securitySensitivePaths))
+    .map((file) => file.path);
+  const scrutinizedPaths = uniquePaths([...extraScrutinyPaths, ...securitySensitivePaths]);
+
+  return {
+    analysisFiles: changedFiles.filter(
+      (file) =>
+        !isMatchedPath(file.path, policy.generatedPaths) || scrutinizedPaths.includes(file.path),
+    ),
+    generatedFiles,
+    extraScrutinyPaths: uniquePaths(extraScrutinyPaths),
+    securitySensitivePaths: uniquePaths(securitySensitivePaths),
+    scrutinizedPaths,
+  };
+}
+
 export function validateReview(
   candidate: ReviewCandidate,
   context: ReviewContext,
@@ -152,14 +187,13 @@ export function validateReview(
   }
 
   const changedFiles = new Map(context.changedFiles.map((file) => [file.path, file]));
-  const scrutinyPaths = context.changedFiles
-    .filter(
-      (file) =>
-        isMatchedPath(file.path, context.policy.extraScrutinyPaths) ||
-        isMatchedPath(file.path, context.policy.securitySensitivePaths),
-    )
-    .map((file) => file.path);
-  if (scrutinyPaths.some((path) => !candidate.scrutinizedPaths.includes(path))) {
+  const policyPlan = buildReviewPolicyPlan(context.changedFiles, context.policy);
+  if (
+    candidate.scrutinizedPaths.some(
+      (path) => !isSafeFindingPath(path) || !changedFiles.has(path),
+    ) ||
+    policyPlan.scrutinizedPaths.some((path) => !candidate.scrutinizedPaths.includes(path))
+  ) {
     return { ok: false, reason: "invalid-semantic-content" };
   }
   const findings: ReviewFinding[] = [];
@@ -181,17 +215,7 @@ export function validateReview(
       suppressedFindings += 1;
       continue;
     }
-    if (
-      isMatchedPath(finding.path, context.policy.extraScrutinyPaths) &&
-      finding.confidence !== "high"
-    ) {
-      suppressedFindings += 1;
-      continue;
-    }
-    if (
-      isMatchedPath(finding.path, context.policy.securitySensitivePaths) &&
-      finding.confidence !== "high"
-    ) {
+    if (policyPlan.scrutinizedPaths.includes(finding.path) && finding.confidence !== "high") {
       suppressedFindings += 1;
       continue;
     }
@@ -209,7 +233,8 @@ export function validateReview(
     ...(suppressedFindings > 0
       ? [`${suppressedFindings} candidate finding(s) were withheld by repository policy.`]
       : []),
-    ...buildPolicyNotes(context.policy, context.changedFiles),
+    ...buildPolicyNotes(policyPlan),
+    ...buildGeneratedNotes(policyPlan),
     ...buildCheckNotes(requiredChecks),
   ];
   const notes = [...mandatoryNotes, ...candidate.notes].slice(0, MAX_REVIEW_NOTES);
@@ -348,16 +373,18 @@ function resolveRequiredChecks(
   });
 }
 
-function buildPolicyNotes(policy: ReviewPolicy, changedFiles: readonly ChangedFile[]): string[] {
-  const scrutinyPaths = changedFiles
-    .filter(
-      (file) =>
-        isMatchedPath(file.path, policy.extraScrutinyPaths) ||
-        isMatchedPath(file.path, policy.securitySensitivePaths),
-    )
+function buildPolicyNotes(policyPlan: ReviewPolicyPlan): string[] {
+  return policyPlan.scrutinizedPaths.length > 0
+    ? [`Additional scrutiny completed for: ${policyPlan.scrutinizedPaths.join(", ")}.`]
+    : [];
+}
+
+function buildGeneratedNotes(policyPlan: ReviewPolicyPlan): string[] {
+  const omittedPaths = policyPlan.generatedFiles
+    .filter((file) => !policyPlan.scrutinizedPaths.includes(file.path))
     .map((file) => file.path);
-  return scrutinyPaths.length > 0
-    ? [`Additional scrutiny completed for: ${[...new Set(scrutinyPaths)].join(", ")}.`]
+  return omittedPaths.length > 0
+    ? [`Generated files omitted from normal analysis: ${uniquePaths(omittedPaths).join(", ")}.`]
     : [];
 }
 
@@ -369,6 +396,10 @@ function buildCheckNotes(checks: readonly CheckEvidence[]): string[] {
 
 function isMatchedPath(path: string, patterns: readonly string[]): boolean {
   return patterns.some((pattern) => globMatches(path, pattern));
+}
+
+function uniquePaths(paths: readonly string[]): string[] {
+  return [...new Set(paths)];
 }
 
 function globMatches(path: string, pattern: string): boolean {
