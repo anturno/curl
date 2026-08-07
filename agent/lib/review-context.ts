@@ -1,17 +1,21 @@
 import type { GitHubChannelState } from "eve/channels/github";
+import { serializeReviewContext } from "./review-budget";
 import {
   buildReviewPolicyPlan,
   type ChangedFile,
+  type ChangedLine,
   type CheckEvidence,
   DEFAULT_REVIEW_POLICY,
+  MAX_REVIEW_PATHS,
   parsePolicyDocument,
   type ReviewContext,
   type ReviewPolicy,
 } from "./review-contract";
 
+export { MAX_REVIEW_CONTEXT_LENGTH } from "./review-budget";
+
 export const REVIEW_POLICY_PATH = ".curl/review-policy.json";
-const MAX_CHANGED_FILES = 1_000;
-const MAX_CONTEXT_FILES = 300;
+const MAX_CHANGED_CONTENT_LENGTH = 500;
 
 export interface ReviewGitHubReader {
   request(input: {
@@ -55,14 +59,16 @@ export async function loadReviewContext(source: ReviewContextSource): Promise<Re
     };
   }
 
-  const [changedFiles, policyResult, checks] = await Promise.all([
+  const [changedFileResult, policyResult, checks] = await Promise.all([
     loadChangedFiles(source.github, repository, baseSha, headSha),
     loadPolicy(source.github, repository, baseSha),
     loadChecks(source.github, repository, headSha),
   ]);
 
   return {
-    changedFiles,
+    changedFiles: changedFileResult.files,
+    changedFilesOmittedPaths: changedFileResult.omittedPaths,
+    changedFilesTruncated: changedFileResult.truncated,
     checks,
     policy: policyResult.policy,
     policyStatus: policyResult.status,
@@ -71,23 +77,7 @@ export async function loadReviewContext(source: ReviewContextSource): Promise<Re
 
 export function buildReviewContextMessage(context: ReviewContext): string {
   const plan = buildReviewPolicyPlan(context.changedFiles, context.policy);
-  const payload = {
-    changedFiles: plan.analysisFiles.slice(0, MAX_CONTEXT_FILES).map((file) => ({
-      path: file.path,
-      changedLines: file.changedLines,
-    })),
-    policy: context.policy,
-    policyApplication: {
-      generatedFiles: plan.generatedFiles.slice(0, MAX_CONTEXT_FILES).map((file) => file.path),
-      omittedGeneratedFiles: plan.generatedFiles
-        .filter((file) => !plan.scrutinizedPaths.includes(file.path))
-        .slice(0, MAX_CONTEXT_FILES)
-        .map((file) => file.path),
-      scrutinizedPaths: plan.scrutinizedPaths.slice(0, MAX_CONTEXT_FILES),
-    },
-    policyStatus: context.policyStatus ?? "valid",
-  };
-  return `<curl_review_context>\n${JSON.stringify(payload)}\n</curl_review_context>`;
+  return serializeReviewContext(context, plan);
 }
 
 async function loadChangedFiles(
@@ -95,25 +85,60 @@ async function loadChangedFiles(
   repository: string,
   baseSha: string,
   headSha: string,
-): Promise<readonly ChangedFile[]> {
+): Promise<{
+  readonly files: readonly ChangedFile[];
+  readonly omittedPaths: number;
+  readonly truncated: boolean;
+}> {
   const body = await requestUnknown(
     github,
     `/repos/${repository}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}`,
   );
   if (!isRecord(body) || !Array.isArray(body.files)) {
-    return [];
+    return { files: [], omittedPaths: 0, truncated: false };
   }
-  return body.files.slice(0, MAX_CHANGED_FILES).flatMap((item): ChangedFile[] => {
+  const selectedItems = body.files.slice(0, MAX_REVIEW_PATHS);
+  const files = selectedItems.flatMap((item): ChangedFile[] => {
     if (!isRecord(item) || typeof item.filename !== "string") {
       return [];
+    }
+    if (typeof item.patch !== "string" || item.patch.length === 0) {
+      return [
+        {
+          path: item.filename,
+          changedLines: [],
+          changedContent: [],
+          diffEvidence: "unavailable",
+        },
+      ];
+    }
+    const parsed = parseChangedLines(item.patch);
+    if (parsed.changedLines.length === 0) {
+      return [
+        {
+          path: item.filename,
+          changedLines: [],
+          changedContent: [],
+          diffEvidence: "unavailable",
+        },
+      ];
     }
     return [
       {
         path: item.filename,
-        changedLines: parseChangedLines(typeof item.patch === "string" ? item.patch : ""),
+        ...parsed,
       },
     ];
   });
+  const omittedPaths = Math.max(
+    0,
+    (readTotalCount(body.changed_files) ?? body.files.length) - files.length,
+  );
+  return {
+    files,
+    omittedPaths,
+    truncated: omittedPaths > 0,
+  };
 }
 
 async function loadPolicy(
@@ -218,9 +243,13 @@ async function requestUnknown(github: ReviewGitHubReader, path: string): Promise
   return response.body;
 }
 
-function parseChangedLines(patch: string): readonly number[] {
+function parseChangedLines(patch: string): {
+  readonly changedLines: readonly number[];
+  readonly changedContent: readonly { readonly line: number; readonly content: string }[];
+} {
   const lines = patch.split("\n");
   const changedLines: number[] = [];
+  const changedContent: ChangedLine[] = [];
   let newLine = 0;
   for (const line of lines) {
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/u.exec(line);
@@ -231,14 +260,18 @@ function parseChangedLines(patch: string): readonly number[] {
     if (newLine === 0 || line.startsWith("\\ No newline")) {
       continue;
     }
-    if (line.startsWith("+") && !line.startsWith("+++")) {
+    if (line.startsWith("+") && !(newLine === 0 && line.startsWith("+++ "))) {
       changedLines.push(newLine);
+      changedContent.push({
+        line: newLine,
+        content: line.slice(1).slice(0, MAX_CHANGED_CONTENT_LENGTH),
+      });
       newLine += 1;
     } else if (!line.startsWith("-")) {
       newLine += 1;
     }
   }
-  return changedLines;
+  return { changedLines, changedContent };
 }
 
 function checkStatus(check: Record<string, unknown>): CheckEvidence["status"] {

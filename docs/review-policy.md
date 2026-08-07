@@ -34,4 +34,6 @@ Required checks are evidence-based. Curl only accepts check runs whose
 `success` conclusion is `passed`, known failure conclusions are `failed`, and
 stale, skipped, neutral, missing, or ambiguous evidence is `unknown`. If
 authoritative check-run data is not available, Curl reports the check as
-`unknown`; it never infers a pass.
+`unknown`; it never infers a pass. The GitHub App must have repository
+**Checks: read** permission to read this evidence. Without that permission,
+configured checks remain `unknown`.

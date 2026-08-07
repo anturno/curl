@@ -25,9 +25,12 @@ channel). Deploy with `eve deploy` — there is no separate frontend host. Read
 [`.env.example`](./.env.example) before changing deployment variables.
 
 Curl is mention-driven only: `@<GITHUB_APP_SLUG> review` on a pull request. There
-is no automatic review, no Check Run, and no eval mock. Grant only the
-documented GitHub App permissions and keep all keys in `.env.local` or the
-deployment secret store.
+is no automatic review, no published Check Run, and no eval mock. The GitHub App
+needs repository **Checks: read** permission so Curl can report configured
+required-check evidence. When that permission is unavailable, the status is
+`unknown`; Curl never infers a passing check. Grant only the documented GitHub
+App permissions and keep all keys in `.env.local` or the deployment secret
+store.
 
 ## Review contract
 

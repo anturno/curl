@@ -1,9 +1,17 @@
 import { z } from "zod";
+import { MAX_REVIEW_CONTEXT_LENGTH, selectReviewContext } from "./review-budget";
 
 export const REVIEW_CONTRACT_VERSION = 1;
+export const MAX_REVIEW_CANDIDATE_FINDINGS = 50;
 export const MAX_REVIEW_FINDINGS = 10;
 export const MAX_REVIEW_NOTES = 5;
 export const MAX_REVIEW_NOTE_LENGTH = 500;
+export const MAX_REVIEW_PATHS = 300;
+/** The complete validated PR summary must fit below GitHub's 65,536 limit. */
+export const MAX_REVIEW_SUMMARY_LENGTH = 60_000;
+export const MAX_REVIEW_PATH_LENGTH = 500;
+export const MAX_REVIEW_SCRUTINY_EVIDENCE = 100;
+export const MIN_GROUNDED_SNIPPET_LENGTH = 8;
 
 const severitySchema = z.enum(["critical", "high", "medium", "low"]);
 const confidenceSchema = z.enum(["high", "medium", "low"]);
@@ -16,7 +24,7 @@ const findingSchema = z
     evidence: z.string().trim().min(20).max(2_000),
     fix: z.string().trim().min(10).max(2_000),
     impact: z.string().trim().min(10).max(2_000),
-    path: z.string().trim().min(1).max(500),
+    path: z.string().trim().min(1).max(MAX_REVIEW_PATH_LENGTH),
     rootCause: z.string().trim().min(10).max(500),
     endLine: z.number().int().positive(),
     severity: severitySchema,
@@ -25,11 +33,26 @@ const findingSchema = z
   })
   .strict();
 
+const scrutinyEvidenceSchema = z
+  .object({
+    line: z.number().int().positive(),
+    content: z.string().trim().min(1).max(500),
+  })
+  .strict();
+
+const scrutinyResultSchema = z
+  .object({
+    evidence: z.array(scrutinyEvidenceSchema).max(MAX_REVIEW_SCRUTINY_EVIDENCE).default([]),
+    path: z.string().trim().min(1).max(MAX_REVIEW_PATH_LENGTH),
+    rationale: z.string().trim().min(1).max(2_000).optional(),
+  })
+  .strict();
+
 const reviewCandidateSchema = z
   .object({
-    findings: z.array(findingSchema).max(50),
+    findings: z.array(findingSchema).max(MAX_REVIEW_CANDIDATE_FINDINGS),
     notes: z.array(z.string().trim().min(1).max(MAX_REVIEW_NOTE_LENGTH)).max(MAX_REVIEW_NOTES),
-    scrutinizedPaths: z.array(z.string().trim().min(1).max(500)).max(100).default([]),
+    scrutiny: z.array(scrutinyResultSchema).max(MAX_REVIEW_PATHS).default([]),
     verdict: z.enum(["clean", "findings"]),
     version: z.literal(REVIEW_CONTRACT_VERSION),
   })
@@ -53,12 +76,24 @@ export type ReviewSeverity = z.infer<typeof severitySchema>;
 export type ReviewConfidence = z.infer<typeof confidenceSchema>;
 export type ReviewCategory = z.infer<typeof categorySchema>;
 export type ReviewFinding = z.infer<typeof findingSchema>;
+export type ReviewScrutinyResult = z.infer<typeof scrutinyResultSchema>;
 export type ReviewCandidate = z.infer<typeof reviewCandidateSchema>;
 export type ReviewPolicy = z.infer<typeof policySchema>;
 
 export interface ChangedFile {
   readonly path: string;
   readonly changedLines: readonly number[];
+  /**
+   * Bounded source snippets for the changed lines. Findings must quote a
+   * snippet from this manifest in their evidence.
+   */
+  readonly changedContent: readonly ChangedLine[];
+  readonly diffEvidence?: "unavailable";
+}
+
+export interface ChangedLine {
+  readonly line: number;
+  readonly content: string;
 }
 
 export interface CheckEvidence {
@@ -68,6 +103,8 @@ export interface CheckEvidence {
 
 export interface ReviewContext {
   readonly changedFiles: readonly ChangedFile[];
+  readonly changedFilesTruncated?: boolean;
+  readonly changedFilesOmittedPaths?: number;
   readonly checks?: readonly CheckEvidence[];
   readonly policyStatus?: "invalid" | "missing" | "valid";
   readonly policy: ReviewPolicy;
@@ -96,7 +133,8 @@ export type ReviewValidationFailure =
   | "invalid-json"
   | "invalid-schema"
   | "invalid-semantic-content"
-  | "missing-diff-context";
+  | "missing-diff-context"
+  | "summary-too-large";
 
 export const DEFAULT_REVIEW_POLICY: ReviewPolicy = {
   extraScrutinyPaths: [],
@@ -186,13 +224,41 @@ export function validateReview(
     return { ok: false, reason: "missing-diff-context" };
   }
 
-  const changedFiles = new Map(context.changedFiles.map((file) => [file.path, file]));
-  const policyPlan = buildReviewPolicyPlan(context.changedFiles, context.policy);
+  const sourcePolicyPlan = buildReviewPolicyPlan(context.changedFiles, context.policy);
+  const contextSelection = selectReviewContext(context, sourcePolicyPlan);
+  const selectedPolicyPlan = buildReviewPolicyPlan(contextSelection.changedFiles, context.policy);
+  const selectedEvidencePaths = new Set(
+    contextSelection.changedFiles
+      .filter((file) => file.changedContent.length > 0)
+      .map((file) => file.path),
+  );
+  const effectivePolicyPlan: ReviewPolicyPlan = {
+    ...selectedPolicyPlan,
+    extraScrutinyPaths: selectedPolicyPlan.extraScrutinyPaths.filter((path) =>
+      selectedEvidencePaths.has(path),
+    ),
+    securitySensitivePaths: selectedPolicyPlan.securitySensitivePaths.filter((path) =>
+      selectedEvidencePaths.has(path),
+    ),
+    scrutinizedPaths: selectedPolicyPlan.scrutinizedPaths.filter((path) =>
+      selectedEvidencePaths.has(path),
+    ),
+  };
+  const changedFiles = new Map(contextSelection.changedFiles.map((file) => [file.path, file]));
+  const scrutinyByPath = new Map(candidate.scrutiny.map((result) => [result.path, result]));
   if (
-    candidate.scrutinizedPaths.some(
-      (path) => !isSafeFindingPath(path) || !changedFiles.has(path),
+    scrutinyByPath.size !== candidate.scrutiny.length ||
+    candidate.scrutiny.some(
+      (result) =>
+        !isSafeFindingPath(result.path) ||
+        !changedFiles.has(result.path) ||
+        !effectivePolicyPlan.scrutinizedPaths.includes(result.path),
     ) ||
-    policyPlan.scrutinizedPaths.some((path) => !candidate.scrutinizedPaths.includes(path))
+    effectivePolicyPlan.scrutinizedPaths.some((path) => {
+      const result = scrutinyByPath.get(path);
+      const file = changedFiles.get(path);
+      return !result || !file || !isValidScrutinyResult(result, file, effectivePolicyPlan);
+    })
   ) {
     return { ok: false, reason: "invalid-semantic-content" };
   }
@@ -200,11 +266,15 @@ export function validateReview(
   let suppressedFindings = 0;
 
   for (const finding of candidate.findings) {
-    if (!isSafeFindingPath(finding.path) || !isConcreteEvidence(finding.evidence)) {
+    if (!isSafeFindingPath(finding.path)) {
       return { ok: false, reason: "invalid-semantic-content" };
     }
     const file = changedFiles.get(finding.path);
-    if (!file || !isValidLineRange(finding, file.changedLines)) {
+    if (
+      !file ||
+      !isValidLineRange(finding, file.changedLines) ||
+      !isGroundedEvidence(finding, file.changedContent)
+    ) {
       return { ok: false, reason: "invalid-semantic-content" };
     }
     if (
@@ -215,16 +285,17 @@ export function validateReview(
       suppressedFindings += 1;
       continue;
     }
-    if (policyPlan.scrutinizedPaths.includes(finding.path) && finding.confidence !== "high") {
+    if (
+      effectivePolicyPlan.scrutinizedPaths.includes(finding.path) &&
+      finding.confidence !== "high"
+    ) {
       suppressedFindings += 1;
       continue;
     }
     findings.push(finding);
   }
 
-  const deduplicated = deduplicateFindings(findings)
-    .sort(compareFindings)
-    .slice(0, MAX_REVIEW_FINDINGS);
+  const deduplicated = deduplicateFindings(findings).slice(0, MAX_REVIEW_FINDINGS);
   const requiredChecks = resolveRequiredChecks(context.policy.requiredChecks, context.checks);
   const mandatoryNotes = [
     ...(context.policyStatus === "invalid" || context.policyStatus === "missing"
@@ -233,11 +304,34 @@ export function validateReview(
     ...(suppressedFindings > 0
       ? [`${suppressedFindings} candidate finding(s) were withheld by repository policy.`]
       : []),
-    ...buildPolicyNotes(policyPlan),
-    ...buildGeneratedNotes(policyPlan),
+    ...(context.changedFilesTruncated
+      ? [
+          `Changed-file input was truncated at ${MAX_REVIEW_PATHS} paths; ${context.changedFilesOmittedPaths ?? "some"} omitted path(s) were not reviewed.`,
+        ]
+      : []),
+    ...(contextSelection.omittedPaths > 0 ||
+    contextSelection.omittedChangedLines > 0 ||
+    contextSelection.omittedChangedContent > 0 ||
+    contextSelection.omittedScrutinyPaths > 0
+      ? [
+          `Review context was bounded at ${MAX_REVIEW_CONTEXT_LENGTH} characters; ${contextSelection.omittedPaths} path(s), ${contextSelection.omittedChangedLines} changed line number(s), and ${contextSelection.omittedChangedContent} changed content snippet(s) were omitted from model context.`,
+        ]
+      : []),
+    ...(contextSelection.omittedScrutinyPaths > 0
+      ? [
+          `${contextSelection.omittedScrutinyPaths} scrutiny path(s) were not part of the bounded validated scrutiny surface.`,
+        ]
+      : []),
+    ...(contextSelection.unavailableDiffPaths > 0
+      ? [
+          `Changed diff evidence was unavailable for ${contextSelection.unavailableDiffPaths} path(s); findings requiring exact diff evidence were withheld.`,
+        ]
+      : []),
+    ...buildPolicyNotes(effectivePolicyPlan),
+    ...buildGeneratedNotes(sourcePolicyPlan),
     ...buildCheckNotes(requiredChecks),
   ];
-  const notes = [...mandatoryNotes, ...candidate.notes].slice(0, MAX_REVIEW_NOTES);
+  const notes = [...mandatoryNotes, ...candidate.notes];
 
   if (candidate.verdict === "clean" && candidate.findings.length > 0) {
     return { ok: false, reason: "invalid-semantic-content" };
@@ -246,15 +340,15 @@ export function validateReview(
     return { ok: false, reason: "invalid-semantic-content" };
   }
 
-  return {
-    ok: true,
-    review: {
-      findings: deduplicated,
-      notes,
-      requiredChecks,
-      verdict: deduplicated.length > 0 ? "findings" : "clean",
-    },
+  const review: ValidatedReview = {
+    findings: deduplicated,
+    notes,
+    requiredChecks,
+    verdict: deduplicated.length > 0 ? "findings" : "clean",
   };
+  return renderReview(review).length <= MAX_REVIEW_SUMMARY_LENGTH
+    ? { ok: true, review }
+    : { ok: false, reason: "summary-too-large" };
 }
 
 export function renderReview(review: ValidatedReview): string {
@@ -312,13 +406,7 @@ function isValidLineRange(
   if (finding.startLine > finding.endLine || finding.endLine - finding.startLine > 20) {
     return false;
   }
-  const changed = new Set(changedLines);
-  for (let line = finding.startLine; line <= finding.endLine; line += 1) {
-    if (!changed.has(line)) {
-      return false;
-    }
-  }
-  return true;
+  return changedLines.some((line) => line >= finding.startLine && line <= finding.endLine);
 }
 
 function isSafeFindingPath(path: string): boolean {
@@ -329,22 +417,78 @@ function isSafeFindingPath(path: string): boolean {
   );
 }
 
-function isConcreteEvidence(evidence: string): boolean {
-  const normalized = normalizeForComparison(evidence);
-  if (
-    /^(?:this|the change|the code) (?:may|might|could|seems to|looks like) (?:be )?(?:a )?(?:potential )?(?:problem|issue|concern)/u.test(
-      normalized,
-    )
-  ) {
-    return false;
+function isGroundedEvidence(
+  finding: Pick<ReviewFinding, "evidence" | "startLine" | "endLine">,
+  changedContent: readonly ChangedLine[],
+): boolean {
+  const anchors = [...finding.evidence.matchAll(/`([^`\r\n]{1,500})`/gu)].map(
+    (match) => match[1]?.trim() ?? "",
+  );
+  return anchors.some((anchor) => {
+    const normalizedAnchor = normalizeSource(anchor);
+    return (
+      isSubstantialAnchor(normalizedAnchor) &&
+      changedContent.some(
+        (line) =>
+          line.line >= finding.startLine &&
+          line.line <= finding.endLine &&
+          normalizeSource(line.content).includes(normalizedAnchor),
+      )
+    );
+  });
+}
+
+function isValidScrutinyResult(
+  result: ReviewScrutinyResult,
+  file: ChangedFile,
+  policyPlan: ReviewPolicyPlan,
+): boolean {
+  const hasChangedContentEvidence = result.evidence.some((evidence) =>
+    file.changedContent.some(
+      (line) =>
+        line.line === evidence.line &&
+        normalizeSource(line.content) === normalizeSource(evidence.content),
+    ),
+  );
+  const hasGroundedRationale =
+    result.rationale !== undefined && isGroundedRationale(result.rationale, file.changedContent);
+  if (policyPlan.securitySensitivePaths.includes(result.path)) {
+    return hasChangedContentEvidence && hasGroundedRationale;
   }
-  return normalized.split(" ").filter((word) => word.length >= 4).length >= 3;
+  return hasGroundedRationale;
+}
+
+function isGroundedRationale(text: string, changedContent: readonly ChangedLine[]): boolean {
+  const anchors = [...text.matchAll(/`([^`\r\n]{1,500})`/gu)].map(
+    (match) => match[1]?.trim() ?? "",
+  );
+  const prose = text.replace(/`[^`\r\n]{1,500}`/gu, "").trim();
+  return (
+    prose.length >= 20 &&
+    /[\p{L}]/u.test(prose) &&
+    anchors.some((anchor) => {
+      const normalizedAnchor = normalizeSource(anchor);
+      return (
+        isSubstantialAnchor(normalizedAnchor) &&
+        changedContent.some((line) => normalizeSource(line.content).includes(normalizedAnchor))
+      );
+    })
+  );
+}
+
+function isSubstantialAnchor(value: string): boolean {
+  return value.length >= MIN_GROUNDED_SNIPPET_LENGTH && /[\p{L}\p{N}]/u.test(value);
 }
 
 function deduplicateFindings(findings: readonly ReviewFinding[]): ReviewFinding[] {
   const seen = new Set<string>();
-  return findings.filter((finding) => {
-    const key = [finding.category, normalizeForComparison(finding.rootCause)].join("|");
+  return [...findings].sort(compareFindings).filter((finding) => {
+    const key = [
+      normalizeForComparison(finding.rootCause),
+      finding.path,
+      finding.startLine,
+      finding.endLine,
+    ].join("|");
     if (seen.has(key)) {
       return false;
     }
@@ -359,7 +503,13 @@ function compareFindings(left: ReviewFinding, right: ReviewFinding): number {
     confidenceRank[right.confidence] - confidenceRank[left.confidence] ||
     left.path.localeCompare(right.path) ||
     left.startLine - right.startLine ||
-    left.title.localeCompare(right.title)
+    left.endLine - right.endLine ||
+    normalizeForComparison(left.rootCause).localeCompare(normalizeForComparison(right.rootCause)) ||
+    left.category.localeCompare(right.category) ||
+    left.title.localeCompare(right.title) ||
+    normalizeForComparison(left.evidence).localeCompare(normalizeForComparison(right.evidence)) ||
+    normalizeForComparison(left.impact).localeCompare(normalizeForComparison(right.impact)) ||
+    normalizeForComparison(left.fix).localeCompare(normalizeForComparison(right.fix))
   );
 }
 
@@ -375,7 +525,11 @@ function resolveRequiredChecks(
 
 function buildPolicyNotes(policyPlan: ReviewPolicyPlan): string[] {
   return policyPlan.scrutinizedPaths.length > 0
-    ? [`Additional scrutiny completed for: ${policyPlan.scrutinizedPaths.join(", ")}.`]
+    ? boundedListNotes(
+        "Additional scrutiny completed for: ",
+        policyPlan.scrutinizedPaths,
+        "scrutiny path(s)",
+      )
     : [];
 }
 
@@ -384,14 +538,35 @@ function buildGeneratedNotes(policyPlan: ReviewPolicyPlan): string[] {
     .filter((file) => !policyPlan.scrutinizedPaths.includes(file.path))
     .map((file) => file.path);
   return omittedPaths.length > 0
-    ? [`Generated files omitted from normal analysis: ${uniquePaths(omittedPaths).join(", ")}.`]
+    ? boundedListNotes(
+        "Generated files omitted from normal analysis: ",
+        uniquePaths(omittedPaths),
+        "generated path(s)",
+      )
     : [];
 }
 
 function buildCheckNotes(checks: readonly CheckEvidence[]): string[] {
   return checks.length > 0
-    ? [`Required checks: ${checks.map((check) => `${check.name}=${check.status}`).join(", ")}.`]
+    ? boundedListNotes(
+        "Required checks: ",
+        checks.map((check) => `${check.name}=${check.status}`),
+        "check(s)",
+      )
     : [];
+}
+
+function boundedListNotes(prefix: string, values: readonly string[], itemLabel: string): string[] {
+  const representativeValues = values.slice(0, 3).map(shortenListValue);
+  const omitted = values.length - representativeValues.length;
+  const detail = representativeValues.join(", ");
+  const limitation =
+    omitted > 0 ? `; ${omitted} ${itemLabel} not listed to keep this note bounded` : "";
+  return [`${prefix}${detail}${limitation}.`];
+}
+
+function shortenListValue(value: string): string {
+  return value.length <= 120 ? value : `${value.slice(0, 117)}...`;
 }
 
 function isMatchedPath(path: string, patterns: readonly string[]): boolean {
@@ -455,6 +630,10 @@ function isSafePolicyPath(value: string): boolean {
 
 function normalizeForComparison(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/gu, " ");
+}
+
+function normalizeSource(value: string): string {
+  return value.trim().replace(/\s+/gu, " ");
 }
 
 function formatLineRange(finding: Pick<ReviewFinding, "startLine" | "endLine">): string {

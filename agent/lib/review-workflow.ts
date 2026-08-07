@@ -14,7 +14,12 @@ import {
   loadReviewContext,
   type ReviewGitHubReader,
 } from "./review-context";
-import { parseReviewCandidate, renderReview, validateReview } from "./review-contract";
+import {
+  MAX_REVIEW_SUMMARY_LENGTH,
+  parseReviewCandidate,
+  renderReview,
+  validateReview,
+} from "./review-contract";
 
 export interface ReviewWorkflowOptions {
   readonly botName: string;
@@ -173,17 +178,37 @@ async function handlePullRequestReview(
     return;
   }
 
+  let result: ReturnType<typeof validateReview>;
   try {
     const context = await loadReviewContext(input.channel);
-    const result = validateReview(candidate, context);
-    if (!result.ok) {
-      await postReviewFailure(input);
-      return;
-    }
-    await postComment(input, renderReview(result.review));
+    result = validateReview(candidate, context);
   } catch (error) {
     logGitHubFailure(buildGitHubFailureContext(input.channel, null, "review.context"), error);
     await postReviewFailure(input);
+    return;
+  }
+  if (!result.ok) {
+    await postReviewFailure(input);
+    return;
+  }
+
+  const summary = renderReview(result.review);
+  if (summary.length > MAX_REVIEW_SUMMARY_LENGTH) {
+    await postReviewFailure(input);
+    return;
+  }
+  await postPullRequestSummary(input, summary);
+}
+
+async function postPullRequestSummary(
+  input: Extract<ReviewLifecycleEvent, { readonly type: "message.completed" }>,
+  summary: string,
+): Promise<void> {
+  try {
+    await input.channel.thread.post(summary);
+  } catch (error) {
+    logGitHubFailure(buildGitHubFailureContext(input.channel, null, "comment.post"), error);
+    throw error;
   }
 }
 
