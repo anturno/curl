@@ -1,15 +1,7 @@
-import {
-  closeAllRememberedCurlOsSessions,
-  closeRememberedCurlOsSession,
-} from "@anturno/curlos/eve";
 import { defaultGitHubAuth, githubChannel } from "eve/channels/github";
 import { openDiffCurlOs } from "../lib/checkout";
 import { config } from "../lib/config";
 import { createReviewWorkflow } from "../lib/review-workflow";
-
-async function closeCurlOs(ctx: { getSandbox(): Promise<{ readonly id: string }> }): Promise<void> {
-  await closeRememberedCurlOsSession((await ctx.getSandbox()).id);
-}
 
 const reviewWorkflow = createReviewWorkflow({ botName: config.botName });
 
@@ -45,52 +37,36 @@ export default githubChannel({
     },
 
     async "turn.completed"(_data, channel, ctx) {
-      try {
-        await reviewWorkflow.handle({
-          auth: ctx.session.auth.current,
-          channel,
-          type: "turn.completed",
-        });
-      } finally {
-        await closeCurlOs(ctx);
-      }
+      await reviewWorkflow.handle({
+        auth: ctx.session.auth.current,
+        channel,
+        type: "turn.completed",
+      });
     },
 
     async "turn.cancelled"(_data, channel, ctx) {
-      try {
-        await reviewWorkflow.handle({
-          auth: ctx.session.auth.current,
-          channel,
-          type: "turn.cancelled",
-        });
-      } finally {
-        await closeCurlOs(ctx);
-      }
+      await reviewWorkflow.handle({
+        auth: ctx.session.auth.current,
+        channel,
+        type: "turn.cancelled",
+      });
     },
 
     async "turn.failed"(data, channel, ctx) {
-      try {
-        await reviewWorkflow.handle({
-          auth: ctx.session.auth.current,
-          channel,
-          details: data.details,
-          type: "turn.failed",
-        });
-      } finally {
-        await closeCurlOs(ctx);
-      }
+      await reviewWorkflow.handle({
+        auth: ctx.session.auth.current,
+        channel,
+        details: data.details,
+        type: "turn.failed",
+      });
     },
 
     async "session.failed"(data, channel) {
-      try {
-        await reviewWorkflow.handle({
-          channel,
-          details: data.details,
-          type: "session.failed",
-        });
-      } finally {
-        await closeAllRememberedCurlOsSessions();
-      }
+      await reviewWorkflow.handle({
+        channel,
+        details: data.details,
+        type: "session.failed",
+      });
     },
   },
 });

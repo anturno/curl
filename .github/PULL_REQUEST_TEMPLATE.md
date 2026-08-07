@@ -5,7 +5,7 @@
 ## Test plan
 
 - [ ] Exercised locally (`bun run typecheck` / relevant manual check)
-- [ ] If user-facing: includes a [changeset](https://github.com/changesets/changesets) (`npx changeset`)
+- [ ] If user-facing: includes a [changeset](https://github.com/changesets/changesets) (`bunx changeset`)
 
 ## Notes for Curl
 

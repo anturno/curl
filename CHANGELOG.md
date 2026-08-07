@@ -39,13 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Minor Changes
+### Changes
 
-- Show review progress as a GitHub Check Run (`Curl review`) on the PR Checks
-  tab — in progress while reviewing, then completed with the verdict/summary.
-  Requires Checks: write on the App; disable with `CURL_CHECK_RUN=0`.
-- Automatically review pull requests when they are opened; mention
-  `@anturno-curl` for an on-demand review.
+- Reuse the pinned CurlOS diff workspace across Eve turns and refresh it only
+  when the pull-request head changes.
+- Use CurlOS-owned diff checkout and canonical read-only review tools instead of
+  duplicating checkout and schema logic inside Curl.
 
 ## 0.1.0
 
