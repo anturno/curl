@@ -30,7 +30,8 @@ malformed policy also uses safe defaults and is mentioned in the review
 summary.
 
 Required checks are evidence-based. Curl only accepts check runs whose
-`head_sha` matches the reviewed head. A `success` conclusion is `passed`, known
-failure conclusions are `failed`, and stale, skipped, neutral, missing, or
-ambiguous evidence is `unknown`. If authoritative check-run data is not
-available, Curl reports the check as `unknown`; it never infers a pass.
+`head_sha` matches the reviewed head and whose `status` is `completed`. A
+`success` conclusion is `passed`, known failure conclusions are `failed`, and
+stale, skipped, neutral, missing, or ambiguous evidence is `unknown`. If
+authoritative check-run data is not available, Curl reports the check as
+`unknown`; it never infers a pass.

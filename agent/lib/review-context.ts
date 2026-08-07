@@ -242,7 +242,7 @@ function parseChangedLines(patch: string): readonly number[] {
 }
 
 function checkStatus(check: Record<string, unknown>): CheckEvidence["status"] {
-  if (typeof check.status === "string" && check.status !== "completed") {
+  if (check.status !== "completed") {
     return "unknown";
   }
   if (check.conclusion === "success") {

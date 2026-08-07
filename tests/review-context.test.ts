@@ -148,7 +148,7 @@ describe("review context loading", () => {
         "/contents/": { content: Buffer.from('{"version":1}').toString("base64") },
         "check-runs": {
           check_runs: [
-            { name: "typecheck", conclusion: "success", head_sha: "head-sha" },
+            { name: "typecheck", status: "completed", conclusion: "success", head_sha: "head-sha" },
             { name: "stale", conclusion: "success", head_sha: "old-sha" },
           ],
         },
@@ -198,10 +198,30 @@ describe("review context loading", () => {
         "/contents/": { content: Buffer.from('{"version":1}').toString("base64") },
         "check-runs": {
           check_runs: [
-            { name: "passed", conclusion: "success", head_sha: "head-sha" },
-            { name: "failed", conclusion: "failure", head_sha: "head-sha" },
-            { name: "skipped", conclusion: "skipped", head_sha: "head-sha" },
-            { name: "stale", conclusion: "stale", head_sha: "head-sha" },
+            {
+              name: "passed",
+              status: "completed",
+              conclusion: "success",
+              head_sha: "head-sha",
+            },
+            {
+              name: "failed",
+              status: "completed",
+              conclusion: "failure",
+              head_sha: "head-sha",
+            },
+            {
+              name: "skipped",
+              status: "completed",
+              conclusion: "skipped",
+              head_sha: "head-sha",
+            },
+            {
+              name: "stale",
+              status: "completed",
+              conclusion: "stale",
+              head_sha: "head-sha",
+            },
           ],
         },
       }),
@@ -270,6 +290,28 @@ describe("review context loading", () => {
               head_sha: "head-sha",
             },
           ],
+        },
+      }),
+      state: {
+        baseSha: "base-sha",
+        headSha: "head-sha",
+        owner: "anturno",
+        pullRequestNumber: 23,
+        repo: "curl",
+      },
+    });
+
+    expect(context.checks).toEqual([{ name: "typecheck", status: "unknown" }]);
+  });
+
+  test("does not treat a check without an explicit completion status as authoritative", async () => {
+    const context = await loadReviewContext({
+      github: readerThatReturns({
+        "/pulls/23": { base: { sha: "base-sha" }, head: { sha: "head-sha" } },
+        "/compare/": { files: [] },
+        "/contents/": { content: Buffer.from('{"version":1}').toString("base64") },
+        "check-runs": {
+          check_runs: [{ name: "typecheck", conclusion: "success", head_sha: "head-sha" }],
         },
       }),
       state: {
