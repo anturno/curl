@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.4
+
+### Patch Changes
+
+- [#21](https://github.com/anturno/curl/pull/21) [`152253d`](https://github.com/anturno/curl/commit/152253deaa3f844d9999f00ea558abf5efc910b3) Thanks [@JLeonStack](https://github.com/JLeonStack)! - Upgrade the Eve runtime to 0.31.2 so GitHub mention-driven sessions use the latest framework fixes and behavior.
+
 ## 0.2.3
 
 ### Patch Changes
