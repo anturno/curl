@@ -29,7 +29,11 @@ Install dependencies with `bun install`, configure the values in
 
 Curl is mention-driven only. Ask it with `@anturno-curl review` on a pull
 request, and it checks only the changed files. There are no automatic reviews,
-check runs, or web hooks beyond the GitHub App webhook. See the
+published check runs, or web hooks beyond the GitHub App webhook. Curl reads
+check runs only to report configured required-check evidence; grant the GitHub
+App the repository permission **Checks: read**. If that permission is
+unavailable, the check status is reported as `unknown`—Curl never infers a
+passing check. See the
 [`agent/instructions.md`](./agent/instructions.md) for the review contract and
 the [CurlOS package](https://github.com/anturno/curlos) for the read-only
 workspace lifecycle.
@@ -40,6 +44,7 @@ Keep secrets in `.env.local` or the deployment secret store.
 ## Docs
 
 - [Review contract](./agent/instructions.md)
+- [Repository review policy](./docs/review-policy.md)
 - [Domain glossary](./CONTEXT.md)
 - [Agent development notes](./AGENTS.md)
 - [CurlOS](https://github.com/anturno/curlos) — read-only review workspace runtime

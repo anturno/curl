@@ -1,16 +1,34 @@
 import type {
+  GitHubChannelState,
   GitHubComment,
-  GitHubEventContext,
   GitHubInboundContext,
   GitHubInboundResult,
   GitHubPullRequestEvent,
+  GitHubThread,
 } from "eve/channels/github";
 import type { SessionAuthContext } from "eve/context";
 import { buildGitHubFailureContext, logGitHubFailure } from "./github-failure";
 import { failureComment, shouldDispatchBotMention, splitCommentBody } from "./review-content";
+import {
+  buildReviewContextMessage,
+  loadReviewContext,
+  type ReviewGitHubReader,
+} from "./review-context";
+import {
+  MAX_REVIEW_SUMMARY_LENGTH,
+  parseReviewCandidate,
+  renderReview,
+  validateReview,
+} from "./review-contract";
 
 export interface ReviewWorkflowOptions {
   readonly botName: string;
+}
+
+export interface ReviewChannel {
+  readonly github: ReviewGitHubReader;
+  readonly state: GitHubChannelState;
+  readonly thread: Pick<GitHubThread, "post">;
 }
 
 export type ReviewDispatchInput =
@@ -30,29 +48,29 @@ export type ReviewDispatchInput =
 export type ReviewLifecycleEvent =
   | {
       readonly auth: SessionAuthContext | null | undefined;
-      readonly channel: GitHubEventContext;
+      readonly channel: ReviewChannel;
       readonly finishReason: string;
       readonly message: string | null | undefined;
       readonly type: "message.completed";
     }
   | {
       readonly auth: SessionAuthContext | null | undefined;
-      readonly channel: GitHubEventContext;
+      readonly channel: ReviewChannel;
       readonly type: "turn.completed";
     }
   | {
       readonly auth: SessionAuthContext | null | undefined;
-      readonly channel: GitHubEventContext;
+      readonly channel: ReviewChannel;
       readonly type: "turn.cancelled";
     }
   | {
       readonly auth: SessionAuthContext | null | undefined;
-      readonly channel: GitHubEventContext;
+      readonly channel: ReviewChannel;
       readonly details: unknown;
       readonly type: "turn.failed";
     }
   | {
-      readonly channel: GitHubEventContext;
+      readonly channel: ReviewChannel;
       readonly details: unknown;
       readonly type: "session.failed";
     };
@@ -110,7 +128,30 @@ async function dispatchComment(
     return null;
   }
 
-  return { auth: input.auth };
+  if (input.context.conversation.pullRequestNumber === null) {
+    return { auth: input.auth };
+  }
+
+  try {
+    const reviewContext = await loadReviewContext({
+      github: input.context.github,
+      state: {
+        baseSha: null,
+        headSha: null,
+        owner: input.context.repository.owner,
+        pullRequestNumber: input.context.conversation.pullRequestNumber,
+        repo: input.context.repository.name,
+      },
+    });
+    return { auth: input.auth, context: [buildReviewContextMessage(reviewContext)] };
+  } catch {
+    return {
+      auth: input.auth,
+      context: [
+        "<curl_review_context>unavailable: changed-file evidence could not be loaded.</curl_review_context>",
+      ],
+    };
+  }
 }
 
 async function handleMessageCompleted(
@@ -120,7 +161,62 @@ async function handleMessageCompleted(
     return;
   }
 
-  for (const chunk of splitCommentBody(input.message)) {
+  if (input.channel.state.pullRequestNumber !== null) {
+    await handlePullRequestReview(input);
+    return;
+  }
+
+  await postComment(input, input.message);
+}
+
+async function handlePullRequestReview(
+  input: Extract<ReviewLifecycleEvent, { readonly type: "message.completed" }>,
+): Promise<void> {
+  const candidate = parseReviewCandidate(input.message ?? "");
+  if (!candidate) {
+    await postReviewFailure(input);
+    return;
+  }
+
+  let result: ReturnType<typeof validateReview>;
+  try {
+    const context = await loadReviewContext(input.channel);
+    result = validateReview(candidate, context);
+  } catch (error) {
+    logGitHubFailure(buildGitHubFailureContext(input.channel, null, "review.context"), error);
+    await postReviewFailure(input);
+    return;
+  }
+  if (!result.ok) {
+    await postReviewFailure(input);
+    return;
+  }
+
+  const summary = renderReview(result.review);
+  if (summary.length > MAX_REVIEW_SUMMARY_LENGTH) {
+    await postReviewFailure(input);
+    return;
+  }
+  await postPullRequestSummary(input, summary);
+}
+
+async function postPullRequestSummary(
+  input: Extract<ReviewLifecycleEvent, { readonly type: "message.completed" }>,
+  summary: string,
+): Promise<void> {
+  try {
+    await input.channel.thread.post(summary);
+  } catch (error) {
+    logGitHubFailure(buildGitHubFailureContext(input.channel, null, "comment.post"), error);
+    throw error;
+  }
+}
+
+async function postComment(
+  input: Extract<ReviewLifecycleEvent, { readonly type: "message.completed" }>,
+  message: string,
+): Promise<void> {
+  for (const chunk of splitCommentBody(message)) {
     try {
       await input.channel.thread.post(chunk);
     } catch (error) {
@@ -128,6 +224,12 @@ async function handleMessageCompleted(
       throw error;
     }
   }
+}
+
+async function postReviewFailure(
+  input: Extract<ReviewLifecycleEvent, { readonly type: "message.completed" }>,
+): Promise<void> {
+  await postComment(input, failureComment("I could not validate the review result.", null));
 }
 
 async function handleTurnCancelled(
