@@ -40,6 +40,7 @@ Keep secrets in `.env.local` or the deployment secret store.
 ## Docs
 
 - [Review contract](./agent/instructions.md)
+- [Repository review policy](./docs/review-policy.md)
 - [Domain glossary](./CONTEXT.md)
 - [Agent development notes](./AGENTS.md)
 - [CurlOS](https://github.com/anturno/curlos) — read-only review workspace runtime

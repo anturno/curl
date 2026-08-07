@@ -16,7 +16,7 @@ type CheckRunReference = Readonly<{
 }>;
 
 export function buildGitHubFailureContext(
-  channel: GitHubEventContext,
+  channel: Pick<GitHubEventContext, "state">,
   checkRun: CheckRunReference | null,
   operation: string,
 ): GitHubFailureContext {
