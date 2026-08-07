@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- [#29](https://github.com/anturno/curl/pull/29) [`7d6e248`](https://github.com/anturno/curl/commit/7d6e248309c7cde9233b786394497e5fa3b71a49) Thanks [@JLeonStack](https://github.com/JLeonStack)! - Enforce structured, diff-grounded review findings and support versioned repository review policies.
+
 ## 0.2.4
 
 ### Patch Changes
