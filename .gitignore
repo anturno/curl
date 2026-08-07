@@ -15,13 +15,4 @@ dist
 .claude
 .devin
 .cursor
-
-# Maintainer-only notes (roadmap, product decisions, drafts).
-# Keep internal/README.md tracked so the convention is visible.
-/internal/**
-!/internal/
-!/internal/README.md
-
-# Vercel CLI appends .env*; keep the example tracked.
-.env*
-!.env.example
+*.pem

@@ -40,16 +40,6 @@ jobs:
       - name: Build
         run: bun run build
 
-      - name: Verify configuration (offline)
-        run: bun run verify:config
-        env:
-          CURL_EVAL_MOCK: "1"
-
-      - name: Evals (fixture format gates)
-        run: bun run eval
-        env:
-          CURL_EVAL_MOCK: "1"
-
   version:
     needs: verify
     if: github.ref == 'refs/heads/main'

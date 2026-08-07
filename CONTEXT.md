@@ -9,21 +9,17 @@ An evaluation of a pull request's changed behavior and security risks against th
 _Avoid_: Audit, scan, lint
 
 **Review head**:
-The exact commit a review evaluates. Findings are about this commit and may be historical if the pull request advances before delivery.
+The exact commit a review evaluates. Findings are about this commit.
 _Avoid_: Current version, branch head
 
 **Review summary**:
 Curl's single prioritized communication of review findings on a pull request.
 _Avoid_: Digest, report, comment thread
 
-**Check Run**:
-The GitHub status associated with a review head that communicates whether Curl is in progress, complete, cancelled, or failed.
-_Avoid_: Build, CI check
-
 **Mention-driven review**:
 A review started when a person explicitly mentions Curl on a pull request or inline review thread.
 _Avoid_: Manual scan, interactive review
 
-**Automatic review**:
-A review started by an eligible pull-request webhook event, subject to the deployment's explicit enablement and repository policy.
-_Avoid_: Background review, passive review
+**Diff-only checkout**:
+Curl materializes only the pull request's changed files into the review workspace.
+_Avoid_: Full tree, full clone

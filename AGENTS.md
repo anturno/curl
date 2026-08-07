@@ -6,24 +6,17 @@ read the matching guide under `node_modules/eve/docs/` (or https://eve.dev/docs)
 ## Product
 
 - Public docs: [`docs/`](./docs/)
-- Maintainer-only notes: [`internal/`](./internal/) (gitignored except `README.md`)
-- Architecture/refactoring/TypeScript work: read and follow [`internal/principles.md`](./internal/principles.md) when present.
+- Engineering principles: [`principles.md`](./principles.md)
+- Public contribution rules: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
 - Review pack: correctness + security only (`agent/instructions.md`)
-- Inference: OpenCode Go via `OPENCODE_API_KEY` (`agent/agent.ts`; default `gpt-5.6-luna` @ high, Responses API)
+- Inference: OpenCode Go via `OPENCODE_API_KEY` (`agent/lib/agent-runtime.ts`; default `gpt-5.6-luna` @ medium reasoning, Responses API)
 - Ingress: GitHub channel at `/eve/v1/github` (`agent/channels/github.ts`)
 - Deploy: `eve deploy`
 
 ## Integrations
 
-Prefer the registry over hand-rolled wiring:
-
-```bash
-bunx eve registry search github
-bunx eve registry view channel/github
-```
-
-Vercel Connect is the preferred path for GitHub App credentials and webhook
-forwarding. Self-managed App credentials are supported with `CURL_GITHUB_AUTH=app`.
+This is a minimal, self-managed GitHub App deployment. Credentials are set via
+`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `GITHUB_WEBHOOK_SECRET`.
 
 ## Local commands
 
@@ -31,8 +24,7 @@ forwarding. Self-managed App credentials are supported with `CURL_GITHUB_AUTH=ap
 bun run check       # Biome
 bun run typecheck
 bun run build
-bun run eval        # golden fixtures (CURL_EVAL_MOCK=1)
-bun run eval:live   # same fixtures via OpenCode Zen
+bun run test
 bun run dev
 bun run deploy
 ```
@@ -44,12 +36,12 @@ bun run deploy
 
 ### Issue tracker
 
-Issues and specs live in GitHub Issues for `anturno/curl`, using the `gh` CLI. See `internal/agents/issue-tracker.md`.
+Issues and specs live in GitHub Issues for `anturno/curl`, using the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Use the canonical labels `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `internal/agents/triage-labels.md`.
+Use the canonical labels `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md` if it exists.
 
 ### Domain docs
 
-This is a single-context repo: read the root `CONTEXT.md` and relevant ADRs under `docs/adr/`. See `internal/agents/domain.md`.
+This is a single-context repo: read the root `CONTEXT.md` and relevant ADRs under `docs/adr/`. See `docs/agents/domain.md`.
