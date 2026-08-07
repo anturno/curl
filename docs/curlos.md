@@ -9,10 +9,12 @@ Curl consumes it as a package dependency (`@anturno/curlos`):
 | Import | Use |
 |---|---|
 | `@anturno/curlos` | Policy + session (`openCurlOs`, limits, meters, remember/close) |
-| `@anturno/curlos/fixture` | Local/in-memory checkout for evals |
 | `@anturno/curlos/sandbox` | just-bash Eve `SandboxBackend` (`agent/sandbox.ts`) |
 | `@anturno/curlos/eve` | `curlOsForSandbox` for model tools |
-| `@anturno/curlos/github` | Host-side GitHub checkout (`openGitHubCurlOs`) |
+
+Curl uses a custom diff-only `CheckoutProvider` in `agent/lib/checkout.ts`. It
+fetches `pulls/{n}/files` and then `git/blobs/{sha}` for each changed file,
+instead of the full-tree `openGitHubCurlOs` in `@anturno/curlos/github`.
 
 Canonical docs: [README](https://github.com/anturno/curlos#readme),
 [API](https://github.com/anturno/curlos/blob/main/docs/api.md),
