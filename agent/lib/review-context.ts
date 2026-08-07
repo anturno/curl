@@ -140,7 +140,7 @@ async function loadChecks(
   repository: string,
   headSha: string,
 ): Promise<readonly CheckEvidence[]> {
-  const checks: CheckEvidence[] = [];
+  const checks = new Map<string, CheckEvidence["status"][]>();
   for (let page = 1; page <= 10; page += 1) {
     let body: unknown;
     try {
@@ -149,21 +149,26 @@ async function loadChecks(
         `/repos/${repository}/commits/${encodeURIComponent(headSha)}/check-runs?per_page=100&page=${page}`,
       );
     } catch {
-      return checks;
+      return [];
     }
     if (!isRecord(body) || !Array.isArray(body.check_runs)) {
-      return checks;
+      return [];
     }
     for (const item of body.check_runs) {
-      if (isRecord(item) && typeof item.name === "string") {
-        checks.push({ name: item.name, status: checkStatus(item.conclusion) });
+      if (isRecord(item) && typeof item.name === "string" && item.head_sha === headSha) {
+        const statuses = checks.get(item.name) ?? [];
+        statuses.push(checkStatus(item.conclusion));
+        checks.set(item.name, statuses);
       }
     }
     if (body.check_runs.length < 100) {
       break;
     }
   }
-  return checks;
+  return [...checks].map(([name, statuses]) => ({
+    name,
+    status: statuses.length === 1 ? statuses[0] : "unknown",
+  }));
 }
 
 async function requestRecord(
@@ -203,7 +208,7 @@ function parseChangedLines(patch: string): readonly number[] {
 }
 
 function checkStatus(conclusion: unknown): CheckEvidence["status"] {
-  if (conclusion === "success" || conclusion === "neutral" || conclusion === "skipped") {
+  if (conclusion === "success") {
     return "passed";
   }
   if (

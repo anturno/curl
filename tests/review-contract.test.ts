@@ -229,6 +229,39 @@ describe("review contract", () => {
         notes: ["Required checks: build=unknown."],
       },
     });
+    if (result.ok) {
+      expect(renderReview(result.review)).toContain("Required checks: build=unknown.");
+    }
+  });
+
+  test("reports authoritative required checks in the single review summary", () => {
+    const result = validateReview(validCandidate(), {
+      ...context,
+      checks: [
+        { name: "typecheck", status: "passed" },
+        { name: "typecheck", status: "failed" },
+        { name: "test", status: "failed" },
+      ],
+      policy: {
+        ...DEFAULT_REVIEW_POLICY,
+        requiredChecks: ["typecheck", "test"],
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      review: {
+        requiredChecks: [
+          { name: "typecheck", status: "unknown" },
+          { name: "test", status: "failed" },
+        ],
+      },
+    });
+    if (result.ok) {
+      expect(renderReview(result.review)).toContain(
+        "Required checks: typecheck=unknown, test=failed.",
+      );
+    }
   });
 
   test("reports missing policy while retaining safe defaults", () => {

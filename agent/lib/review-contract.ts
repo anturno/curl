@@ -343,8 +343,8 @@ function resolveRequiredChecks(
   checks: readonly CheckEvidence[] | undefined,
 ): CheckEvidence[] {
   return names.map((name) => {
-    const evidence = checks?.find((check) => check.name === name);
-    return evidence ?? { name, status: "unknown" };
+    const evidence = checks?.filter((check) => check.name === name) ?? [];
+    return evidence.length === 1 ? evidence[0] : { name, status: "unknown" };
   });
 }
 
