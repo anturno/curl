@@ -4,7 +4,7 @@
 
 | Version | Supported |
 |---------|-----------|
-| Latest GitHub Release (`v0.1.x`) | Yes |
+| Latest GitHub Release (`v0.2.x`) | Yes |
 | `main` | Yes — development / best effort |
 | Older minor lines | Best effort; upgrade when possible |
 

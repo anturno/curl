@@ -6,7 +6,7 @@
       "name": "anturno-curl",
       "dependencies": {
         "@ai-sdk/openai": "^4.0.29",
-        "@anturno/curlos": "^0.3.0",
+        "@anturno/curlos": "^0.4.0",
         "ai": "^7.0.38",
         "eve": "^0.29.5",
         "just-bash": "3.2.0",
@@ -34,7 +34,7 @@
 
     "@ai-sdk/provider-utils": ["@ai-sdk/provider-utils@5.0.20", "", { "dependencies": { "@ai-sdk/provider": "4.0.5", "@standard-schema/spec": "^1.1.0", "@workflow/serde": "4.1.0", "eventsource-parser": "^3.0.8", "undici": "^7.28.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-9W8c2mXiGgbo9sBBT4ybEWF8znxla2CO8VTim8t5oCCLP4aDH4o6RvkHfwL/iLC6mEbO4a6LpS2FBbQHccU+ig=="],
 
-    "@anturno/curlos": ["@anturno/curlos@0.3.0", "", { "peerDependencies": { "eve": "^0.29.0", "just-bash": "~3.2.0" }, "optionalPeers": ["eve", "just-bash"] }, "sha512-vXxBe8WrCa8/bd6YNmUxKmxgUP0c8pxsX8O07xW32Uw6pkYuHaY4+SzsavmoLDzOF+OdaR1B26eDqcps4PqdWQ=="],
+    "@anturno/curlos": ["@anturno/curlos@0.4.0", "", { "peerDependencies": { "eve": "^0.29.0", "just-bash": "~3.2.0" } }, "sha512-AtAag0pvlWtrFUZNsizNt9wwHaBOFhL9fWlMrMVYFCfogKed32BfwjEPoEX1pUSz1tLBdP4C4/z4ZeOq/jSFXA=="],
 
     "@babel/runtime": ["@babel/runtime@7.29.7", "", {}, "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw=="],
 

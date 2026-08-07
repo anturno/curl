@@ -1,8 +1,5 @@
 # Curl
 
-![Curl — judgment for pull requests](./docs/assets/banner.png)
-
-
 Curl is an open-source GitHub pull request reviewer. Ask it to look at a PR and
 it posts **one clear summary**: correctness and security issues first, ranked by
 severity. Noise stays out of the way.
@@ -27,23 +24,24 @@ choose — including this one.
 
 ## Get started
 
-Install and deploy: **[docs/install.md](./docs/install.md)**
+Install dependencies with `bun install`, configure the values in
+[`.env.example`](./.env.example), then deploy with `bun run deploy`.
 
 Curl is mention-driven only. Ask it with `@anturno-curl review` on a pull
 request, and it checks only the changed files. There are no automatic reviews,
 check runs, or web hooks beyond the GitHub App webhook. See the
-[configuration guide](./docs/configuration.md) for the exact permissions and
-environment values.
+[`agent/instructions.md`](./agent/instructions.md) for the review contract and
+the [CurlOS package](https://github.com/anturno/curlos) for the read-only
+workspace lifecycle.
 
 For local changes, run `bun run check`, `bun run typecheck`, and `bun test`.
 Keep secrets in `.env.local` or the deployment secret store.
 
 ## Docs
 
-- [Install](./docs/install.md)
-- [Configuration](./docs/configuration.md)
-- [Troubleshooting](./docs/troubleshooting.md)
-- [Architecture](./docs/architecture.md)
+- [Review contract](./agent/instructions.md)
+- [Domain glossary](./CONTEXT.md)
+- [Agent development notes](./AGENTS.md)
 - [CurlOS](https://github.com/anturno/curlos) — read-only review workspace runtime
 - [Contributing](./CONTRIBUTING.md)
 - [Security](./SECURITY.md)

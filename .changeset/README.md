@@ -4,7 +4,7 @@ This project uses [changesets](https://github.com/changesets/changesets) to
 version releases and generate changelog entries.
 
 ```bash
-npx changeset
+bunx changeset
 ```
 
 On `main`, `changesets/action` opens a **Version Packages** PR. After that PR

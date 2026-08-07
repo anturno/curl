@@ -20,10 +20,9 @@ bun run build
 bun run dev                  # eve HMR + REPL
 ```
 
-The product is the `agent/` directory (instructions + GitHub channel). Deploy
-with `eve deploy` — there is no separate frontend host. Read
-[`docs/configuration.md`](./docs/configuration.md) before changing deployment
-variables.
+The product is the `agent/` directory (instructions, tools, sandbox, and GitHub
+channel). Deploy with `eve deploy` — there is no separate frontend host. Read
+[`.env.example`](./.env.example) before changing deployment variables.
 
 Curl is mention-driven only: `@<GITHUB_APP_SLUG> review` on a pull request. There
 is no automatic review, no Check Run, and no eval mock. Grant only the
@@ -34,14 +33,15 @@ deployment secret store.
 
 Default reviews cover **correctness + security** only. Keep PRs focused. Prefer
 small releases over large speculative features. Public scope is in
-[`docs/architecture.md`](./docs/architecture.md) and [`principles.md`](./principles.md).
+[`agent/instructions.md`](./agent/instructions.md), [`CONTEXT.md`](./CONTEXT.md),
+and the [CurlOS package](https://github.com/anturno/curlos).
 
 ## Changesets
 
 User-facing changes should include a changeset:
 
 ```bash
-npx changeset
+bunx changeset
 ```
 
 Choose an appropriate bump and describe the change in product language.
