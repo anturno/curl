@@ -1,22 +1,4 @@
-import type { ReviewHeadStatus } from "./review-head";
-
 export const REVIEW_COMMENT_MAX = 65_536;
-
-export interface ReviewCheckOutput {
-  readonly summary: string;
-  readonly text: string;
-  readonly title: string;
-}
-
-function extractVerdict(message: string): string | null {
-  const match = /\*\*Verdict:\*\*\s*(.+)/i.exec(message);
-  const verdict = match?.[1]?.trim();
-  return verdict && verdict.length > 0 ? verdict : null;
-}
-
-function shortSha(sha: string): string {
-  return sha.slice(0, 12);
-}
 
 /** Split long bodies the way GitHub comment limits require. */
 export function splitCommentBody(body: string, maxLength = REVIEW_COMMENT_MAX): string[] {
@@ -42,48 +24,7 @@ export function splitCommentBody(body: string, maxLength = REVIEW_COMMENT_MAX): 
   return chunks;
 }
 
-/** Add an explicit historical warning rather than presenting old findings as current. */
-export function annotateHistoricalReview(
-  message: string,
-  headStatus: ReviewHeadStatus | null,
-): string {
-  if (!headStatus?.stale || !headStatus.currentHeadSha) {
-    return message;
-  }
-  return [
-    message,
-    "",
-    `> **Historical review:** Curl reviewed commit \`${shortSha(headStatus.reviewedHeadSha)}\`, but this pull request now points to \`${shortSha(headStatus.currentHeadSha)}\`. These findings may not apply to the current head.`,
-  ].join("\n");
-}
-
-/** Build check-run copy from a finished review comment body. */
-export function reviewCheckOutput(
-  message: string,
-  headStatus: ReviewHeadStatus | null = null,
-): ReviewCheckOutput {
-  const verdict = extractVerdict(message);
-  const title = verdict ? `Verdict: ${verdict}` : "Review complete";
-  if (headStatus?.stale && headStatus.currentHeadSha) {
-    return {
-      title: `Historical — ${title}`,
-      summary: `Curl reviewed commit **${shortSha(headStatus.reviewedHeadSha)}**, but the PR now points to **${shortSha(headStatus.currentHeadSha)}**. Findings may be stale; see the historical review comment below.`,
-      text: message,
-    };
-  }
-  return {
-    title,
-    summary: verdict
-      ? `Curl finished with verdict **${verdict}**. Full findings are in the PR comment and below.`
-      : "Curl finished reviewing. Full findings are in the PR comment and below.",
-    text: message,
-  };
-}
-
-/**
- * Whether a timeline/review comment should dispatch a bot turn.
- * Mirrors eve's default mention gate closely enough for Curl.
- */
+/** Whether a timeline/review comment should dispatch a bot turn. */
 export function shouldDispatchBotMention(input: {
   readonly authorLogin?: string;
   readonly authorType?: string;
@@ -114,4 +55,15 @@ export function normalizeBotName(botName: string): string {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+export function failureComment(message: string, errorId: string | null): string {
+  return [
+    message,
+    "",
+    "Please try again, rephrase, or reach out if it keeps failing.",
+    errorId ? `Error id: ${errorId}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }

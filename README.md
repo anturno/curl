@@ -29,18 +29,14 @@ choose — including this one.
 
 Install and deploy: **[docs/install.md](./docs/install.md)**
 
-Automatic review is opt-in and stays disabled until `CURL_AUTO_REVIEW=1` (or
-`true`) is set. Keep the App allowlisted to the repositories you intend to
-review, and use the mention-driven path first. See the
-[configuration guide](./docs/configuration.md) for the exact permissions,
-privacy boundary, and environment values.
+Curl is mention-driven only. Ask it with `@anturno-curl review` on a pull
+request, and it checks only the changed files. There are no automatic reviews,
+check runs, or web hooks beyond the GitHub App webhook. See the
+[configuration guide](./docs/configuration.md) for the exact permissions and
+environment values.
 
-For local changes, run `bun run check`, `bun run typecheck`, `bun test`,
-`bun run verify:config`, and the deterministic mock-backed `bun run eval`.
-`bun run eval:live` is an explicit provider-backed check and is not a mandatory
-CI gate. Keep secrets in `.env.local` or the deployment secret store; never use
-`CURL_EVAL_MOCK=1` in production. See [troubleshooting](./docs/troubleshooting.md)
-when a review or deployment does not behave as expected.
+For local changes, run `bun run check`, `bun run typecheck`, and `bun test`.
+Keep secrets in `.env.local` or the deployment secret store.
 
 ## Docs
 

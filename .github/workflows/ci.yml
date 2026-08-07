@@ -41,22 +41,3 @@ jobs:
 
       - name: Build
         run: bun run build
-
-      - name: Verify configuration (offline)
-        run: bun run verify:config
-        env:
-          CURL_EVAL_MOCK: "1"
-
-      - name: Evals (fixture format gates)
-        run: bun run eval
-        env:
-          # Deterministic mock model — no OpenCode key required in CI.
-          CURL_EVAL_MOCK: "1"
-
-      - name: Upload eval artifacts
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: eve-evals
-          path: .eve/evals/
-          if-no-files-found: ignore

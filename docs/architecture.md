@@ -1,80 +1,54 @@
 # Architecture
 
-Curl is an [eve](https://eve.dev/) agent. There is no separate web app — the
-product is the `agent/` directory, deployed with `eve deploy` (or
-`eve build` + `eve start`).
+Curl is a minimal [eve](https://eve.dev/) agent. There is no separate web app.
+The product is the `agent/` directory, deployed with `eve deploy`.
 
 ```text
 @anturno-curl review  (on a PR)
         │
         ▼
-GitHub App / Vercel Connect
+Self-managed GitHub App
         │  webhook
         ▼
 Deployed eve host  →  POST /eve/v1/github
         │
         ├─ verify webhook
         ├─ installation token for that repo
-        ├─ PR diff + sandbox checkout (eve)
-        ├─ check run: Curl review (in_progress)
+        ├─ PR diff + diff-only sandbox checkout
         └─ agent/ (instructions, OpenCode Go model)
                 │
                 ▼
-        Prioritized summary comment + check run completed (neutral)
+        One new prioritized summary comment
 ```
 
 ## Runtime modules
 
-The deployed entry points are intentionally thin composition roots:
-
 - `agent/agent.ts` wires Eve to `createAgentDefinition`.
-- `agent/channels/github.ts` adapts Eve webhook and lifecycle callbacks to the
-  review workflow and owns only GitHub credentials and channel configuration.
-- `agent/lib/review-workflow.ts` is the deep review module. Its two entry points
-  are `dispatch` for inbound triggers and `handle` for turn/session events. It
-  owns review policy, check-run ordering, stale-head protection, comment
-  identity, failure delivery, and durable check-run metadata.
-- `agent/lib/review-check-run.ts` contains the GitHub Check Run adapter and
-  defensive parsing primitives used behind the workflow seam.
-- `agent/lib/config.ts` validates environment input. `loadReviewConfig` accepts
-  an explicit environment, while the exported runtime config is composed once
-  for production.
-- `agent/lib/agent-runtime.ts` composes the provider model and runtime guards
-  from validated configuration; provider construction is not part of the Eve
-  channel adapter.
+- `agent/channels/github.ts` adapts the GitHub webhook and lifecycle callbacks.
+  It owns self-managed GitHub App credentials and the diff-only CurlOS session.
+- `agent/lib/review-workflow.ts` has two entry points: `dispatch` for mentions
+  and `handle` for turn/session events. It posts one summary comment.
+- `agent/lib/config.ts` validates the small environment surface.
+- `agent/lib/agent-runtime.ts` composes the OpenCode Go provider.
+- `agent/lib/checkout.ts` implements a diff-only `CheckoutProvider` that
+  materializes only the pull request's changed files.
 - `agent/sandbox.ts` wires `@anturno/curlos/sandbox` (just-bash Eve backend).
-- CurlOS ([anturno/curlos](https://github.com/anturno/curlos)) owns the review
-  workspace: policy, session API, host adapters, and GitHub checkout provider.
-  Tools use `@anturno/curlos` / `@anturno/curlos/eve`; the GitHub channel opens
-  sessions via `@anturno/curlos/github`.
 
 ## CurlOS boundary
 
 CurlOS confines model-facing reads and searches to `/workspace`, bounds their
 inputs and outputs, and exposes no model-controlled write, shell, network, or
 process capability. The custom sandbox uses just-bash's in-memory virtual
-filesystem, has no guest network, and only permits bounded `find`/`grep`
-commands. This is a small application-owned backend inspired by AgentOS's
-capability model, not a copy of its Rust kernel or VFS.
+filesystem and has no guest network.
 
-Canonical docs and the `@anturno/curlos` package live in
-[anturno/curlos](https://github.com/anturno/curlos). See the local pointer
-[`curlos.md`](./curlos.md).
-
-The workflow interface is the test surface. Tests provide fake Eve GitHub
-contexts and GitHub request responses, so lifecycle behavior can be verified
-without a deployed webhook or provider call. No speculative cross-platform port
-is introduced until a second production adapter exists.
+Curl now uses its own diff-only checkout. It fetches the PR changed files via
+`pulls/{n}/files`, then each blob via `git/blobs/{sha}`. Credentials stay on the
+host; only decoded file bytes enter the workspace.
 
 ## Default review pack
 
-Correctness and security only. Style nits are out of scope unless they cause a
-real bug or vulnerability. Output is one prioritized summary comment. Progress
-appears as a GitHub Check Run named **Curl review** (requires Checks: write;
-disable with `CURL_CHECK_RUN=0`). Completed reviews conclude `neutral` so findings
-do not block merges; cancelled or failed sessions use their matching conclusion.
+Correctness and security only. Style nits are out of scope. Output is one
+prioritized summary comment posted as a new comment on each review.
 
-## Out of scope (for now)
-
-Not included yet: hosted multi-tenant product, dashboard/login, automatic code
-fixes, dense inline comment threads, or ticket filing.
+There are no automatic reviews, no Check Runs, and no historical/stale-head
+annotations.
