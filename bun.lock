@@ -8,7 +8,7 @@
         "@ai-sdk/openai": "^4.0.29",
         "@anturno/curlos": "^0.4.0",
         "ai": "^7.0.38",
-        "eve": "^0.29.5",
+        "eve": "^0.31.2",
         "just-bash": "3.2.0",
         "zod": "4.4.3",
       },
@@ -276,7 +276,7 @@
 
     "esprima": ["esprima@4.0.1", "", { "bin": { "esparse": "./bin/esparse.js", "esvalidate": "./bin/esvalidate.js" } }, "sha512-eGuFFw7Upda+g4p+QHvnW0RyTX/SVeJBDM/gCtMARO0cLuT2HcEKnTPvhjV6aGeqrCB/sbNop0Kszm0jsaWU4A=="],
 
-    "eve": ["eve@0.29.5", "", { "dependencies": { "nitro": "3.0.260610-beta", "undici": "8.9.0" }, "peerDependencies": { "@opentelemetry/api": "^1.0.0", "ai": "^7.0.38", "braintrust": "^3.0.0", "just-bash": "^3.0.0", "microsandbox": "^0.5.0" }, "optionalPeers": ["@opentelemetry/api", "braintrust", "just-bash", "microsandbox"], "bin": { "eve": "./bin/eve.js" } }, "sha512-XiIJHANIgT7LQAZ3e2MyQG4N+B9dPYwdFk0rAzSGYSBjgavCbCtX/tXDlqasjIfEH726uxFdYrLGnlGvIZ38vg=="],
+    "eve": ["eve@0.31.2", "", { "dependencies": { "nitro": "3.0.260610-beta", "undici": "8.9.0" }, "peerDependencies": { "@opentelemetry/api": "^1.0.0", "ai": "^7.0.38", "braintrust": "^3.0.0", "just-bash": "^3.0.0", "microsandbox": "^0.5.0" }, "optionalPeers": ["@opentelemetry/api", "braintrust", "just-bash", "microsandbox"], "bin": { "eve": "./bin/eve.js" } }, "sha512-Ve26qtui3DTYYkA6xkWIEi9gviCpGkXfxfqgcdQMFt5JoWghhHUPYSFToZd47tz6dl4Np4o+QcO67Ng/A1FZ7g=="],
 
     "eventsource-parser": ["eventsource-parser@3.1.0", "", {}, "sha512-kJezFj9YFAMLeORyi7aCLxLbD5/qWMQnoMVlVPyHIll7lgRJCc3JVln9Vgl9nwQi0YkMnhdGTMNn7CkRRAptMg=="],
 
