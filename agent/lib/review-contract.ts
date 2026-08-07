@@ -17,6 +17,7 @@ const findingSchema = z
     fix: z.string().trim().min(10).max(2_000),
     impact: z.string().trim().min(10).max(2_000),
     path: z.string().trim().min(1).max(500),
+    rootCause: z.string().trim().min(10).max(500),
     endLine: z.number().int().positive(),
     severity: severitySchema,
     startLine: z.number().int().positive(),
@@ -151,33 +152,38 @@ export function validateReview(
   }
 
   const changedFiles = new Map(context.changedFiles.map((file) => [file.path, file]));
-  const extraScrutinyPaths = context.changedFiles
-    .filter((file) => isMatchedPath(file.path, context.policy.extraScrutinyPaths))
+  const scrutinyPaths = context.changedFiles
+    .filter(
+      (file) =>
+        isMatchedPath(file.path, context.policy.extraScrutinyPaths) ||
+        isMatchedPath(file.path, context.policy.securitySensitivePaths),
+    )
     .map((file) => file.path);
-  if (extraScrutinyPaths.some((path) => !candidate.scrutinizedPaths.includes(path))) {
+  if (scrutinyPaths.some((path) => !candidate.scrutinizedPaths.includes(path))) {
     return { ok: false, reason: "invalid-semantic-content" };
   }
   const findings: ReviewFinding[] = [];
   let suppressedFindings = 0;
 
   for (const finding of candidate.findings) {
+    if (!isSafeFindingPath(finding.path) || !isConcreteEvidence(finding.evidence)) {
+      return { ok: false, reason: "invalid-semantic-content" };
+    }
     const file = changedFiles.get(finding.path);
     if (!file || !isValidLineRange(finding, file.changedLines)) {
       return { ok: false, reason: "invalid-semantic-content" };
-    }
-    if (isMatchedPath(finding.path, context.policy.generatedPaths)) {
-      const securityRelevant =
-        finding.category === "security" ||
-        isMatchedPath(finding.path, context.policy.securitySensitivePaths);
-      if (!securityRelevant) {
-        suppressedFindings += 1;
-        continue;
-      }
     }
     if (
       severityRank[finding.severity] < severityRank[context.policy.minimumPublicationSeverity] ||
       confidenceRank[finding.confidence] <
         confidenceRank[context.policy.minimumPublicationConfidence]
+    ) {
+      suppressedFindings += 1;
+      continue;
+    }
+    if (
+      isMatchedPath(finding.path, context.policy.extraScrutinyPaths) &&
+      finding.confidence !== "high"
     ) {
       suppressedFindings += 1;
       continue;
@@ -197,8 +203,8 @@ export function validateReview(
     .slice(0, MAX_REVIEW_FINDINGS);
   const requiredChecks = resolveRequiredChecks(context.policy.requiredChecks, context.checks);
   const mandatoryNotes = [
-    ...(context.policyStatus === "invalid"
-      ? ["Repository review policy was invalid; safe defaults were used."]
+    ...(context.policyStatus === "invalid" || context.policyStatus === "missing"
+      ? [`Repository review policy was ${context.policyStatus}; safe defaults were used.`]
       : []),
     ...(suppressedFindings > 0
       ? [`${suppressedFindings} candidate finding(s) were withheld by repository policy.`]
@@ -290,10 +296,30 @@ function isValidLineRange(
   return true;
 }
 
+function isSafeFindingPath(path: string): boolean {
+  return (
+    !path.startsWith("/") &&
+    !path.includes("\\") &&
+    !path.split("/").some((part) => part === "" || part === "." || part === "..")
+  );
+}
+
+function isConcreteEvidence(evidence: string): boolean {
+  const normalized = normalizeForComparison(evidence);
+  if (
+    /^(?:this|the change|the code) (?:may|might|could|seems to|looks like) (?:be )?(?:a )?(?:potential )?(?:problem|issue|concern)/u.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  return normalized.split(" ").filter((word) => word.length >= 4).length >= 3;
+}
+
 function deduplicateFindings(findings: readonly ReviewFinding[]): ReviewFinding[] {
   const seen = new Set<string>();
   return findings.filter((finding) => {
-    const key = [finding.category, normalizeForComparison(finding.title)].join("|");
+    const key = [finding.category, normalizeForComparison(finding.rootCause)].join("|");
     if (seen.has(key)) {
       return false;
     }
@@ -323,11 +349,15 @@ function resolveRequiredChecks(
 }
 
 function buildPolicyNotes(policy: ReviewPolicy, changedFiles: readonly ChangedFile[]): string[] {
-  const extraScrutiny = changedFiles
-    .filter((file) => isMatchedPath(file.path, policy.extraScrutinyPaths))
+  const scrutinyPaths = changedFiles
+    .filter(
+      (file) =>
+        isMatchedPath(file.path, policy.extraScrutinyPaths) ||
+        isMatchedPath(file.path, policy.securitySensitivePaths),
+    )
     .map((file) => file.path);
-  return extraScrutiny.length > 0
-    ? [`Additional scrutiny completed for: ${extraScrutiny.join(", ")}.`]
+  return scrutinyPaths.length > 0
+    ? [`Additional scrutiny completed for: ${[...new Set(scrutinyPaths)].join(", ")}.`]
     : [];
 }
 

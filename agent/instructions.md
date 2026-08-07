@@ -71,10 +71,15 @@ finding must contain:
 - `fix`: a concrete fix direction, at least 10 characters
 - `impact`: the production consequence, at least 10 characters
 - `path`: a repository-relative changed file path
+- `rootCause`: the underlying defect identity, at least 10 characters; use the same value for duplicate reports of one defect
 - `startLine` and `endLine`: positive changed-file line numbers
 - `severity`: `"critical"`, `"high"`, `"medium"`, or `"low"`
 - `title`: a concise description
 - `scrutinizedPaths`: every changed path selected by the repository's extra-scrutiny policy
+
+When policy marks a path as generated, omit it from normal analysis unless the
+change creates a concrete correctness or security risk. A reported finding on a
+generated path is treated as such a risk and remains publishable.
 
 An empty `findings` array is a valid successful review. Do not report a
 hypothetical concern without concrete diff evidence. The delivery layer

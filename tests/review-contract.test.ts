@@ -18,6 +18,7 @@ const finding: ReviewFinding = {
   fix: "Pass the value as a non-shell argument and validate the accepted command set.",
   impact: "An attacker can execute commands with the review service account privileges.",
   path: "src/runner.ts",
+  rootCause: "User-controlled input reaches an executable shell sink.",
   endLine: 12,
   severity: "high" as const,
   startLine: 12,
@@ -67,7 +68,87 @@ describe("review contract", () => {
     });
   });
 
-  test("filters generated noise but retains security findings", () => {
+  test("rejects unsafe anchors and generic evidence", () => {
+    expect(validateReview(validCandidate({ path: "../src/runner.ts" }), context)).toEqual({
+      ok: false,
+      reason: "invalid-semantic-content",
+    });
+    expect(
+      validateReview(
+        validCandidate({
+          evidence: "This could be a potential problem with the change.",
+        }),
+        context,
+      ),
+    ).toEqual({
+      ok: false,
+      reason: "invalid-semantic-content",
+    });
+    expect(validateReview(validCandidate({ startLine: 9, endLine: 9 }), context)).toEqual({
+      ok: false,
+      reason: "invalid-semantic-content",
+    });
+  });
+
+  test("filters speculative high-severity findings without failing the review", () => {
+    const result = validateReview(validCandidate({ confidence: "low", severity: "high" }), context);
+    expect(result).toMatchObject({
+      ok: true,
+      review: {
+        findings: [],
+        notes: ["1 candidate finding(s) were withheld by repository policy."],
+        verdict: "clean",
+      },
+    });
+  });
+
+  test("rejects invalid enums and oversized structured results", () => {
+    expect(
+      parseReviewCandidate(
+        JSON.stringify({
+          findings: [{ ...finding, severity: "style" }],
+          notes: [],
+          scrutinizedPaths: [],
+          verdict: "findings",
+          version: 1,
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      parseReviewCandidate(
+        JSON.stringify({
+          findings: Array.from({ length: 51 }, () => finding),
+          notes: [],
+          scrutinizedPaths: [],
+          verdict: "findings",
+          version: 1,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  test("renders an empty review as a successful concise summary", () => {
+    const candidate = parseReviewCandidate(
+      JSON.stringify({
+        findings: [],
+        notes: [],
+        scrutinizedPaths: [],
+        verdict: "clean",
+        version: 1,
+      }),
+    );
+    if (!candidate) {
+      throw new Error("expected an empty review candidate");
+    }
+    const result = validateReview(candidate, context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(renderReview(result.review)).toContain("No correctness or security findings.");
+  });
+
+  test("retains generated correctness and security findings", () => {
     const candidate = validCandidate({
       category: "correctness",
       path: "generated/client.ts",
@@ -83,7 +164,7 @@ describe("review contract", () => {
 
     expect(validateReview(candidate, generatedContext)).toMatchObject({
       ok: true,
-      review: { findings: [], verdict: "clean" },
+      review: { findings: [expect.objectContaining({ category: "correctness" })] },
     });
 
     expect(
@@ -101,7 +182,13 @@ describe("review contract", () => {
     const candidate: ReviewCandidate = {
       findings: [
         finding,
-        { ...finding, title: "User input reaches the shell" },
+        {
+          ...finding,
+          endLine: 13,
+          startLine: 13,
+          rootCause: "User-controlled input reaches an executable shell sink.",
+          title: "User input reaches the shell",
+        },
         {
           ...finding,
           category: "correctness",
@@ -144,12 +231,48 @@ describe("review contract", () => {
     });
   });
 
+  test("reports missing policy while retaining safe defaults", () => {
+    const result = validateReview(validCandidate(), {
+      ...context,
+      policyStatus: "missing",
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      review: {
+        notes: ["Repository review policy was missing; safe defaults were used."],
+      },
+    });
+  });
+
   test("requires and reports an extra-scrutiny pass", () => {
     const policyContext: ReviewContext = {
       ...context,
       policy: {
         ...DEFAULT_REVIEW_POLICY,
         extraScrutinyPaths: ["src/**"],
+      },
+    };
+    expect(validateReview(validCandidate(), policyContext)).toEqual({
+      ok: false,
+      reason: "invalid-semantic-content",
+    });
+
+    const result = validateReview(
+      { ...validCandidate(), scrutinizedPaths: ["src/runner.ts"] },
+      policyContext,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      review: { notes: ["Additional scrutiny completed for: src/runner.ts."] },
+    });
+  });
+
+  test("requires stronger evidence on security-sensitive paths", () => {
+    const policyContext: ReviewContext = {
+      ...context,
+      policy: {
+        ...DEFAULT_REVIEW_POLICY,
+        securitySensitivePaths: ["src/**"],
       },
     };
     expect(validateReview(validCandidate(), policyContext)).toEqual({
